@@ -1,0 +1,28 @@
+# Данные клиентов и участников исследования НИКОГДА не попадают в репозиторий
+data/
+*.sav
+*.dta
+**/raw/
+**/private/
+
+# Секреты
+.env
+*.env
+secrets*
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Системное
+.DS_Store
+Thumbs.db
+
+# Локальные заметки Claude Code
+CLAUDE.local.md

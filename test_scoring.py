@@ -1,0 +1,46 @@
+import pytest
+
+from mbc.measures import GAD7, OASIS, get_measure
+from mbc.scoring import ScoringError, score
+
+
+def test_full_responses_sum():
+    result = score(GAD7, [1, 2, 3, 0, 1, 2, 1])
+    assert result.total == 10
+    assert result.severity == "умеренная"
+    assert not result.prorated
+
+
+def test_missing_item_strict_by_default():
+    result = score(GAD7, [1, 2, None, 0, 1, 2, 1])
+    assert result.total is None
+
+
+def test_prorating_when_allowed():
+    result = score(GAD7, [2, 2, None, 2, 2, 2, 2], max_missing=1)
+    assert result.total == 14
+    assert result.prorated
+
+
+def test_wrong_length_raises():
+    with pytest.raises(ScoringError):
+        score(GAD7, [1, 2, 3])
+
+
+def test_out_of_range_raises():
+    with pytest.raises(ScoringError):
+        score(GAD7, [4, 0, 0, 0, 0, 0, 0])
+
+
+def test_oasis_range_is_0_to_4():
+    assert score(OASIS, [4, 4, 4, 4, 4]).total == 20
+    assert OASIS.max_total == 20
+
+
+def test_bool_is_not_a_valid_answer():
+    with pytest.raises(ScoringError):
+        score(GAD7, [True, 0, 0, 0, 0, 0, 0])
+
+
+def test_get_measure_accepts_dash():
+    assert get_measure("gad-7") is GAD7
