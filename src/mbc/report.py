@@ -380,6 +380,8 @@ def _render_status(report: ClientReport) -> list[str]:
         lines.append(f"  порог «случая»: {m.caseness} — {m.caseness_source}")
     if not m.severity_bands:
         lines.append("  диапазоны тяжести для шкалы не заданы")
+    else:
+        lines.append(f"  диапазоны тяжести: {m.severity_source or 'источник не указан'}")
     if not m.verified_ru_thresholds:
         lines.append("  ! пороги шкалы не пересчитаны на русских данных")
     mark = "! " if m.russian_version.startswith("нет") else ""

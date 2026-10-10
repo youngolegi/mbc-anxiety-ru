@@ -56,3 +56,9 @@ def test_get_measure_accepts_dash():
 def test_prorating_rounds_half_up(answers, expected):
     result = score(GAD7, answers, max_missing=1)
     assert result.total == expected and result.prorated
+
+
+def test_every_severity_band_has_source():
+    # правило 3: границы тяжести — тоже пороги
+    from mbc.measures import MEASURES
+    assert all(m.severity_source for m in MEASURES.values() if m.severity_bands)

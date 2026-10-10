@@ -241,6 +241,7 @@ def test_status_and_sources_in_text():
                                "по одной шкале (GAD7)") for line in lines)
     assert f"  порог надёжного изменения: 4 — {GAD7.reliable_change_source}" in lines
     assert f"  порог «случая»: 8 — {GAD7.caseness_source}" in lines
+    assert "  диапазоны тяжести: Spitzer et al., 2006" in lines
     assert "  ! пороги шкалы не пересчитаны на русских данных" in lines
     assert f"  русская версия: {GAD7.russian_version}" in lines
 

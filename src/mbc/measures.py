@@ -30,6 +30,8 @@ class Measure:
     reliable_change_source: str = ""
     severity_bands: tuple[tuple[int, str], ...] = ()
     """Пары (нижняя граница, метка), по возрастанию."""
+    severity_source: str = ""
+    """Источник границ тяжести: это тоже пороги."""
     safety_items: tuple[int, ...] = ()
     """Номера пунктов (с 1), положительный ответ на которые требует протокола безопасности."""
     russian_version: str = ""
@@ -62,6 +64,7 @@ GAD7 = Measure(
     reliable_change=4,
     reliable_change_source="NHS Talking Therapies",
     severity_bands=((0, "минимальная"), (5, "лёгкая"), (10, "умеренная"), (15, "тяжёлая")),
+    severity_source="Spitzer et al., 2006",
     russian_version="Золотарева А.А., 2023, Консультативная психология и психотерапия 31(4):31–46",
 )
 
@@ -75,6 +78,7 @@ PHQ9 = Measure(
     reliable_change_source="NHS Talking Therapies",
     severity_bands=((0, "минимальная"), (5, "лёгкая"), (10, "умеренная"),
                     (15, "умеренно тяжёлая"), (20, "тяжёлая")),
+    severity_source="Kroenke et al., 2001",
     safety_items=(9,),
     russian_version="используется; конкретную адаптацию выбрать",
 )

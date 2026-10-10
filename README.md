@@ -58,10 +58,10 @@ flowchart TD
 ## Быстрый старт
 
 ```bash
-git clone https://github.com/<user>/mbc-anxiety-ru.git
+git clone https://github.com/youngolegi/mbc-anxiety-ru.git
 cd mbc-anxiety-ru
 python -m pip install -e ".[dev]"
-pytest -q                 # 117 тестов
+pytest -q                 # 118 тестов
 python examples/demo.py   # демонстрация на синтетических данных
 ```
 
