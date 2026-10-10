@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from mbc.hypotheses import Hypothesis, evidence_for_pattern  # noqa: E402
+from mbc.hypotheses import Hypothesis, evidence_for_pattern, verify_evidence  # noqa: E402
 from mbc.measures import GAD7, PHQ8  # noqa: E402
 from mbc.report import build_report, render_text  # noqa: E402
 from mbc.scoring import score  # noqa: E402
@@ -93,6 +93,7 @@ hypothesis = Hypothesis(
     alternative="Совпадение с недосыпом и вечерним временем, а не содержание разговора",
     check_question="Что именно в этих разговорах запускает тревогу — тема, тон, ожидание звонка?",
 )
+verify_evidence(hypothesis, entries, top)  # опора существует в записях, иначе ValueError
 print("\n" + hypothesis.render())
 
 # --- 4. Отчёт для терапевта ------------------------------------------------------
