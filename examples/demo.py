@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from mbc.hypotheses import Hypothesis, evidence_for_pattern  # noqa: E402
 from mbc.measures import GAD7, PHQ8  # noqa: E402
+from mbc.report import build_report, render_text  # noqa: E402
 from mbc.scoring import score  # noqa: E402
 from mbc.status import outcome  # noqa: E402
 from mbc.trajectory import rule_based_flag  # noqa: E402
@@ -30,10 +31,12 @@ gad7_by_session = {
     6: [1, 1, 1, 1, 1, 1, 1],
 }
 history: list[tuple[int, int]] = []
+gad7_scores = []
 print("\nGAD-7 по сессиям:")
 for session, answers in gad7_by_session.items():
     s = score(GAD7, answers)
     history.append((session, s.total))
+    gad7_scores.append((session, s))
     flag = rule_based_flag(GAD7, history)
     print(f"  сессия {session}: {s.total:>2} ({s.severity:<11}) → {flag.signal.value}: {flag.reason}")
 
@@ -91,3 +94,8 @@ hypothesis = Hypothesis(
     check_question="Что именно в этих разговорах запускает тревогу — тема, тон, ожидание звонка?",
 )
 print("\n" + hypothesis.render())
+
+# --- 4. Отчёт для терапевта ------------------------------------------------------
+# PHQ-8 не содержит пункта безопасности: проверка не проводилась → safety_alerts=None
+print("\n" + "=" * 64)
+print(render_text(build_report(GAD7, gad7_scores, entries)))
