@@ -61,7 +61,7 @@ flowchart TD
 git clone https://github.com/youngolegi/mbc-anxiety-ru.git
 cd mbc-anxiety-ru
 python -m pip install -e ".[dev]"
-pytest -q                 # 119 тестов
+pytest -q                 # 150 тестов
 python examples/demo.py   # демонстрация на синтетических данных
 ```
 
