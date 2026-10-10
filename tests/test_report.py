@@ -236,7 +236,7 @@ def test_status_and_sources_in_text():
     assert report.outcome is Outcome.RECOVERED
     lines = lines_of(render_text(report))
     assert lines[0] == "ОТЧЁТ ДЛЯ ТЕРАПЕВТА · GAD7 · сессии 1–6"
-    assert "СТАТУС: 15 (тяжёлая) → 7 (лёгкая), сессии 1 → 6: выздоровление" in lines
+    assert "СТАТУС: 15 (тяжёлая) → 7 (лёгкая), сессии 1 → 6: надёжное выздоровление" in lines
     assert any(line.startswith("  логика статуса — практика NHS Talking Therapies, "
                                "по одной шкале (GAD7)") for line in lines)
     assert f"  порог надёжного изменения: 4 — {GAD7.reliable_change_source}" in lines
@@ -253,7 +253,7 @@ def test_measure_without_threshold_requires_explicit_one():
     report = build_report(OASIS, oasis, threshold=5, threshold_source="синтетический порог")
     assert report.outcome is Outcome.RECOVERED
     lines = lines_of(render_text(report))
-    assert "СТАТУС: 12 → 5, сессии 1 → 4: выздоровление" in lines
+    assert "СТАТУС: 12 → 5, сессии 1 → 4: надёжное выздоровление" in lines
     assert (f"  порог надёжного изменения: 5 — синтетический порог "
             f"(справка по шкале: {OASIS.reliable_change_source})") in lines
     assert "  диапазоны тяжести для шкалы не заданы" in lines
@@ -271,7 +271,7 @@ def test_measure_without_caseness():
     wsas = [(1, score(WSAS, [6] * 5)), (2, score(WSAS, [2] * 5))]
     lines = lines_of(text_of(WSAS, wsas, threshold=8, threshold_source="синтетика"))
     assert "СТАТУС: 30 → 10, сессии 1 → 2: надёжное улучшение" in lines
-    assert f"  порог «случая»: {WSAS.caseness_source} — «выздоровление» не определяется" in lines
+    assert f"  порог «случая»: {WSAS.caseness_source} — «надёжное выздоровление» не определяется" in lines
 
 
 # --- светофор: когда правило применимо --------------------------------------------------

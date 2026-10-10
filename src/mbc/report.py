@@ -370,12 +370,12 @@ def _render_status(report: ClientReport) -> list[str]:
         lines = [f"СТАТУС: {_with_severity(base)} → {_with_severity(latest)}, "
                  f"сессии {base.session} → {latest.session}: {report.outcome.value}{mark}"]
     lines.append(f"  логика статуса — практика NHS Talking Therapies, по одной шкале "
-                 f"({m.code}); в NHS «выздоровление» засчитывают по двум шкалам сразу — "
+                 f"({m.code}); в NHS «надёжное выздоровление» засчитывают по двум шкалам сразу — "
                  f"здесь шкалы не объединяются")
     lines.append(f"  порог надёжного изменения: {report.threshold:g} — {report.threshold_source}"
                  + _threshold_note(report))
     if m.caseness is None:
-        lines.append(f"  порог «случая»: {m.caseness_source} — «выздоровление» не определяется")
+        lines.append(f"  порог «случая»: {m.caseness_source} — «надёжное выздоровление» не определяется")
     else:
         lines.append(f"  порог «случая»: {m.caseness} — {m.caseness_source}")
     if not m.severity_bands:

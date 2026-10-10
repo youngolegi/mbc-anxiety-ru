@@ -24,3 +24,8 @@ def test_measure_without_threshold_requires_explicit_one():
     with pytest.raises(ValueError, match="rci_threshold"):
         outcome(OASIS, 12, 6)
     assert outcome(OASIS, 12, 6, threshold=5) is Outcome.RECOVERED
+
+
+def test_recovered_label_is_reliable_recovery():
+    # RECOVERED = надёжное улучшение + ниже порога: в терминах NHS это reliable recovery
+    assert Outcome.RECOVERED.value == "надёжное выздоровление"
