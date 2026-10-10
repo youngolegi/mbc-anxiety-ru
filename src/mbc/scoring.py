@@ -28,6 +28,9 @@ def score(measure: Measure, responses: Sequence[int | None], max_missing: int = 
     При 0 < пропусков <= max_missing балл пересчитывается пропорционально
     (среднее по ответам × число пунктов). Это допущение, а не стандарт:
     включайте его осознанно и фиксируйте в отчёте.
+
+    Округление арифметическое: ровно .5 — вверх, как ROUND в Excel (10.5 → 11).
+    Встроенный round() округляет .5 к чётному: 10.5 → 10, но 17.5 → 18.
     """
     if len(responses) != measure.n_items:
         raise ScoringError(
@@ -54,6 +57,7 @@ def score(measure: Measure, responses: Sequence[int | None], max_missing: int = 
         total = sum(answered)
         prorated = False
     else:
-        total = round(sum(answered) / len(answered) * measure.n_items)
+        # floor(сумма × пункты / ответы + 1/2) в целых числах — без ошибок плавающей точки
+        total = (2 * sum(answered) * measure.n_items + len(answered)) // (2 * len(answered))
         prorated = True
     return Score(measure.code, total, len(answered), prorated, measure.severity(total))
