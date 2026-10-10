@@ -10,7 +10,9 @@ RCI    = (X2 − X1) / S_diff
 его одинаково ко всем клиентам.
 
 Порог по своей выборке — threshold_from_sample(). Правила расчёта:
-- SD и надёжность считаются на одной и той же выборке, иначе SEM неверна;
+- SD и надёжность считаются на одной и той же выборке, иначе SEM неверна
+  (проверяется: reliability_n должно совпасть с n; ICC ретеста может быть с другой
+  выборки — анализ чувствительности, — тогда это помечается в source);
 - в выборку идут только полные замеры, пересчитанные из-за пропусков исключаются;
 - SD выборочное (n − 1);
 - для OASIS основной коэффициент — ω наблюдаемой суммы баллов (по ковариациям сырых
@@ -109,10 +111,16 @@ class SampleThreshold:
     sd: float
     reliability: float
     kind: ReliabilityKind
+    reliability_n: int
+    """n выборки, на которой посчитан коэффициент надёжности."""
     z: float
     sem: float
     s_diff: float
     threshold: float
+
+    @property
+    def same_sample(self) -> bool:
+        return self.reliability_n == self.n
 
     @property
     def min_change_points(self) -> int:
@@ -121,22 +129,31 @@ class SampleThreshold:
     @property
     def source(self) -> str:
         excluded = f", исключено неполных: {self.excluded}" if self.excluded else ""
+        other = "" if self.same_sample else f" на другой выборке (n = {self.reliability_n})"
         return (f"рассчитан по выборке: n = {self.n}{excluded}, SD = {self.sd:.3g}, "
-                f"{self.kind.value} = {self.reliability:g}, z = {self.z:g}")
+                f"{self.kind.value} = {self.reliability:g}{other}, z = {self.z:g}")
 
 
 def threshold_from_sample(scores: Iterable[Score], reliability: float, *,
-                          kind: ReliabilityKind, z: float = 1.96) -> SampleThreshold:
+                          kind: ReliabilityKind, reliability_n: int,
+                          z: float = 1.96) -> SampleThreshold:
     """Порог надёжного изменения по выборке первых замеров.
 
     scores — первые замеры одной шкалы, по одному на человека. Неполные (total=None)
     и пересчитанные из-за пропусков (prorated) исключаются и считаются в excluded.
     reliability — коэффициент, посчитанный на той же выборке полных замеров;
     kind — его вид, обязателен: выбор коэффициента не должен быть неявным.
+    reliability_n — на скольких замерах посчитан коэффициент. Для ω и α должно
+    совпасть с n полных замеров, иначе SEM неверна и это ошибка; для ICC ретеста
+    допускается другая выборка (анализ чувствительности) — это пишется в source.
     Жёсткого минимума n нет (кроме n ≥ 2), но n всегда виден в результате.
     """
     if not isinstance(kind, ReliabilityKind):
         raise TypeError("kind — значение ReliabilityKind")
+    if isinstance(reliability_n, bool) or not isinstance(reliability_n, int):
+        raise TypeError("reliability_n — целое число")
+    if reliability_n < 2:
+        raise ValueError("reliability_n должно быть не меньше 2")
     if isinstance(z, bool) or not isinstance(z, (int, float)) or not math.isfinite(z) or z <= 0:
         raise ValueError("z должно быть положительным конечным числом")
     scores = tuple(scores)
@@ -157,8 +174,12 @@ def threshold_from_sample(scores: Iterable[Score], reliability: float, *,
                 or not measure.min_total <= total <= measure.max_total:
             raise ValueError(f"{measure.code}: балл {total!r} — не целое число "
                              f"в диапазоне {measure.min_total}–{measure.max_total}")
+    if kind is not ReliabilityKind.RETEST and reliability_n != len(complete):
+        raise ValueError(f"{kind.value} посчитан на другой выборке (n = {reliability_n}), "
+                         f"а SD — на {len(complete)} полных замерах: SEM будет неверной. "
+                         f"SD и надёжность считаются на одной выборке")
     sd = stdev(complete)
     sem = standard_error_of_measurement(sd, reliability)
     s_diff = math.sqrt(2) * sem
     return SampleThreshold(measure.code, len(complete), excluded, mean(complete), sd,
-                           reliability, kind, z, sem, s_diff, z * s_diff)
+                           reliability, kind, reliability_n, z, sem, s_diff, z * s_diff)

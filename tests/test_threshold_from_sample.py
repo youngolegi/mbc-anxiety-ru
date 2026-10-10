@@ -62,7 +62,7 @@ def test_classify_change_tolerates_float_noise():
 # --- расчёт по выборке ---------------------------------------------------------------
 
 def test_hand_calculation():
-    t = threshold_from_sample(SAMPLE, 0.92, kind=OMEGA)
+    t = threshold_from_sample(SAMPLE, 0.92, kind=OMEGA, reliability_n=3)
     assert (t.measure, t.n, t.excluded, t.mean, t.sd) == ("GAD7", 3, 0, 5.0, 5.0)
     assert t.sem == pytest.approx(1.4142, rel=1e-3)
     assert t.s_diff == pytest.approx(2.0)
@@ -73,24 +73,24 @@ def test_hand_calculation():
 
 def test_sample_sd_uses_n_minus_1():
     # выборочное SD (n − 1): 5,0; «генеральное» (n) дало бы ≈ 4,08 и порог меньше
-    assert threshold_from_sample(SAMPLE, 0.92, kind=OMEGA).sd == 5.0
+    assert threshold_from_sample(SAMPLE, 0.92, kind=OMEGA, reliability_n=3).sd == 5.0
 
 
 def test_n_is_a_numeric_field():
-    t = threshold_from_sample(SAMPLE, 0.92, kind=OMEGA)
+    t = threshold_from_sample(SAMPLE, 0.92, kind=OMEGA, reliability_n=3)
     assert isinstance(t.n, int) and t.n == 3
 
 
 def test_retest_gives_larger_threshold_than_omega():
-    omega = threshold_from_sample(SAMPLE, 0.92, kind=OMEGA)
-    retest = threshold_from_sample(SAMPLE, 0.83, kind=RETEST)
+    omega = threshold_from_sample(SAMPLE, 0.92, kind=OMEGA, reliability_n=3)
+    retest = threshold_from_sample(SAMPLE, 0.83, kind=RETEST, reliability_n=3)
     assert retest.threshold > omega.threshold * 1.4
     assert (omega.min_change_points, retest.min_change_points) == (4, 6)
 
 
 def test_computed_exact_threshold_is_not_inflated_by_noise():
     # r = 0,82, z = 2: порог ровно 6 (SEM = 5·√0,18, S_diff = 3), в плавающей точке — чуть больше
-    t = threshold_from_sample(SAMPLE, 0.82, kind=OMEGA, z=2)
+    t = threshold_from_sample(SAMPLE, 0.82, kind=OMEGA, reliability_n=3, z=2)
     assert t.threshold == pytest.approx(6.0) and t.threshold > 6
     assert t.min_change_points == 6
     assert classify_change(14, 8, t.threshold) is Change.IMPROVED
@@ -99,32 +99,72 @@ def test_computed_exact_threshold_is_not_inflated_by_noise():
 def test_incomplete_and_prorated_scores_are_excluded_and_counted():
     prorated = score(GAD7, [2, 2, None, 2, 2, 2, 2], max_missing=1)   # 14, пересчитан
     missing = score(GAD7, [2, 2, None, 2, 2, 2, 2])                    # не засчитан
-    t = threshold_from_sample(SAMPLE + [prorated, missing], 0.92, kind=OMEGA)
+    t = threshold_from_sample(SAMPLE + [prorated, missing], 0.92, kind=OMEGA, reliability_n=3)
     assert (t.n, t.excluded, t.sd) == (3, 2, 5.0)
     assert "исключено неполных: 2" in t.source
 
 
 def test_source_records_every_choice():
-    source = threshold_from_sample(SAMPLE, 0.92, kind=OMEGA).source
+    source = threshold_from_sample(SAMPLE, 0.92, kind=OMEGA, reliability_n=3).source
     for part in ("по выборке", "n = 3", "SD = 5", "ω наблюдаемой суммы = 0.92", "z = 1.96"):
         assert part in source
     assert "исключено" not in source
 
 
 def test_iterator_input_is_not_lost():
-    assert threshold_from_sample(iter(SAMPLE), 0.92, kind=OMEGA) == \
-        threshold_from_sample(SAMPLE, 0.92, kind=OMEGA)
+    assert threshold_from_sample(iter(SAMPLE), 0.92, kind=OMEGA, reliability_n=3) == \
+        threshold_from_sample(SAMPLE, 0.92, kind=OMEGA, reliability_n=3)
 
 
 def test_kind_is_required():
     with pytest.raises(TypeError):
-        threshold_from_sample(SAMPLE, 0.92)
+        threshold_from_sample(SAMPLE, 0.92, reliability_n=3)
 
 
 @pytest.mark.parametrize("kind", ["omega", None, 1])
 def test_kind_must_be_reliability_kind(kind):
     with pytest.raises(TypeError):
-        threshold_from_sample(SAMPLE, 0.92, kind=kind)
+        threshold_from_sample(SAMPLE, 0.92, kind=kind, reliability_n=3)
+
+
+# --- одна выборка для SD и надёжности -------------------------------------------------
+
+def test_reliability_n_is_required():
+    with pytest.raises(TypeError):
+        threshold_from_sample(SAMPLE, 0.92, kind=OMEGA)
+
+
+@pytest.mark.parametrize("kind", [OMEGA, ALPHA])
+def test_internal_consistency_must_come_from_the_same_sample(kind):
+    with pytest.raises(ValueError, match="на другой выборке"):
+        threshold_from_sample(SAMPLE, 0.92, kind=kind, reliability_n=120)
+
+
+def test_same_sample_means_complete_scores_after_exclusion():
+    # 3 полных + 2 неполных: коэффициент считается на тех же 3 полных, а не на 5
+    sample = SAMPLE + [score(GAD7, [None] * 7), score(GAD7, [2, 2, None, 2, 2, 2, 2], max_missing=1)]
+    with pytest.raises(ValueError, match="на другой выборке"):
+        threshold_from_sample(sample, 0.92, kind=OMEGA, reliability_n=5)
+    assert threshold_from_sample(sample, 0.92, kind=OMEGA, reliability_n=3).same_sample
+
+
+def test_retest_from_another_sample_is_allowed_and_marked():
+    t = threshold_from_sample(SAMPLE, 0.83, kind=RETEST, reliability_n=50)
+    assert not t.same_sample and t.reliability_n == 50
+    assert "ICC ретеста = 0.83 на другой выборке (n = 50)" in t.source
+
+
+def test_retest_from_the_same_sample_is_not_marked():
+    t = threshold_from_sample(SAMPLE, 0.83, kind=RETEST, reliability_n=3)
+    assert t.same_sample and "другой выборке" not in t.source
+
+
+@pytest.mark.parametrize("value,error", [
+    (1, ValueError), (0, ValueError), (True, TypeError), (2.5, TypeError), ("3", TypeError),
+])
+def test_invalid_reliability_n_rejected(value, error):
+    with pytest.raises(error):
+        threshold_from_sample(SAMPLE, 0.92, kind=RETEST, reliability_n=value)
 
 
 def test_ordinal_omega_is_not_offered():
@@ -140,7 +180,7 @@ def test_ordinal_omega_is_not_offered():
 ], ids=["пусто", "один", "без-разброса", "один-полный"])
 def test_too_few_or_degenerate_samples_rejected(sample):
     with pytest.raises(ValueError):
-        threshold_from_sample(sample, 0.92, kind=OMEGA)
+        threshold_from_sample(sample, 0.92, kind=OMEGA, reliability_n=3)
 
 
 @pytest.mark.parametrize("bad", [
@@ -152,24 +192,24 @@ def test_too_few_or_degenerate_samples_rejected(sample):
 ], ids=["число", "None", "вне-диапазона", "дробный", "bool"])
 def test_invalid_items_rejected(bad):
     with pytest.raises(ValueError):
-        threshold_from_sample(SAMPLE + [bad], 0.92, kind=OMEGA)
+        threshold_from_sample(SAMPLE + [bad], 0.92, kind=OMEGA, reliability_n=3)
 
 
 def test_mixed_measures_rejected():
     with pytest.raises(ValueError, match="разные шкалы"):
-        threshold_from_sample(SAMPLE + [full(10, OASIS)], 0.92, kind=OMEGA)
+        threshold_from_sample(SAMPLE + [full(10, OASIS)], 0.92, kind=OMEGA, reliability_n=3)
 
 
 @pytest.mark.parametrize("reliability", [1.0, -0.1, math.nan, False])
 def test_invalid_reliability_rejected(reliability):
     with pytest.raises(ValueError):
-        threshold_from_sample(SAMPLE, reliability, kind=OMEGA)
+        threshold_from_sample(SAMPLE, reliability, kind=OMEGA, reliability_n=3)
 
 
 @pytest.mark.parametrize("z", [0, -1.96, math.nan, True])
 def test_invalid_z_rejected(z):
     with pytest.raises(ValueError):
-        threshold_from_sample(SAMPLE, 0.92, kind=OMEGA, z=z)
+        threshold_from_sample(SAMPLE, 0.92, kind=OMEGA, reliability_n=3, z=z)
 
 
 # --- связка с отчётом -----------------------------------------------------------------
@@ -179,7 +219,7 @@ OASIS_CLIENT = [(1, score(OASIS, [3, 3, 2, 2, 2])), (4, score(OASIS, [1] * 5))]
 
 
 def test_report_prints_sample_size_and_source():
-    t = threshold_from_sample(OASIS_SAMPLE, 0.85, kind=OMEGA)
+    t = threshold_from_sample(OASIS_SAMPLE, 0.85, kind=OMEGA, reliability_n=5)
     lines = render_text(build_report(OASIS, OASIS_CLIENT, threshold=t)).splitlines()
     assert any(line.startswith(f"  порог надёжного изменения: {t.threshold:g} — {t.source}")
                for line in lines)
@@ -187,13 +227,13 @@ def test_report_prints_sample_size_and_source():
 
 
 def test_report_rejects_second_source_for_computed_threshold():
-    t = threshold_from_sample(OASIS_SAMPLE, 0.85, kind=OMEGA)
+    t = threshold_from_sample(OASIS_SAMPLE, 0.85, kind=OMEGA, reliability_n=5)
     with pytest.raises(ValueError, match="источник уже есть"):
         build_report(OASIS, OASIS_CLIENT, threshold=t, threshold_source="другой")
 
 
 def test_report_rejects_threshold_of_another_measure():
-    t = threshold_from_sample(SAMPLE, 0.92, kind=OMEGA)   # GAD-7
+    t = threshold_from_sample(SAMPLE, 0.92, kind=OMEGA, reliability_n=3)   # GAD-7
     with pytest.raises(ValueError, match="рассчитан для GAD7"):
         build_report(OASIS, OASIS_CLIENT, threshold=t)
 
