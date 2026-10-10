@@ -32,6 +32,7 @@ from typing import Iterable, Sequence
 from .measures import Measure
 from .safety import SafetyAlert
 from .scoring import Score
+from .reliable_change import SampleThreshold
 from .status import Outcome, outcome, resolve_threshold
 from .trajectory import Signal, TrajectoryFlag, rule_based_flag
 from .triggers import (DIMENSIONS, Pattern, TriggerEntry, WeekStat, find_patterns,
@@ -90,6 +91,8 @@ class ClientReport:
     threshold: float
     threshold_source: str
     threshold_explicit: bool
+    threshold_sample_n: int | None
+    """n выборки, если порог рассчитан по ней (threshold_from_sample), иначе None."""
     check_by_session: int
     flag: TrajectoryFlag
     outcome: Outcome | None
@@ -138,7 +141,7 @@ def build_report(
     entries: Iterable[TriggerEntry] = (),
     safety_alerts: Iterable[tuple[int, SafetyAlert]] | None = None,
     *,
-    threshold: float | None = None,
+    threshold: float | SampleThreshold | None = None,
     threshold_source: str | None = None,
     check_by_session: int = 4,
     top_n: int = 3,
@@ -149,8 +152,9 @@ def build_report(
     """Собирает данные отчёта. Ничего не печатает — для текста есть render_text().
 
     threshold — порог надёжного изменения в баллах. Если у шкалы его нет, передать
-    обязательно (молча чужой порог не подставляется). Переданный порог требует
-    threshold_source: каждый порог в отчёте — с источником.
+    обязательно (молча чужой порог не подставляется). Переданное число требует
+    threshold_source: каждый порог в отчёте — с источником. Порог, рассчитанный
+    threshold_from_sample(), передаётся целиком: источник и n берутся из расчёта.
     """
     if top_n < 1:
         raise ValueError("top_n должен быть не меньше 1")
@@ -158,6 +162,14 @@ def build_report(
         raise ValueError("min_episodes должен быть не меньше 2: паттерн — повторяющийся контекст")
     if not dimensions:
         raise ValueError("Нужно хотя бы одно измерение для поиска паттернов")
+    sample_n = None
+    if isinstance(threshold, SampleThreshold):
+        if threshold_source is not None:
+            raise ValueError("У рассчитанного порога источник уже есть — threshold_source не нужен")
+        if threshold.measure != measure.code:
+            raise ValueError(f"Порог рассчитан для {threshold.measure}, а отчёт — по {measure.code}")
+        threshold, threshold_source, sample_n = (threshold.threshold, threshold.source,
+                                                  threshold.n)
     if threshold is not None and not (threshold_source or "").strip():
         raise ValueError("Переданному порогу нужен источник: укажите threshold_source")
     if threshold is None and threshold_source is not None:
@@ -194,7 +206,8 @@ def build_report(
         measure=measure, history=history, threshold=thr,
         threshold_source=threshold_source if threshold is not None
         else measure.reliable_change_source,
-        threshold_explicit=threshold is not None, check_by_session=check_by_session,
+        threshold_explicit=threshold is not None, threshold_sample_n=sample_n,
+        check_by_session=check_by_session,
         flag=flag, outcome=result, patterns=patterns, patterns_found=len(found),
         dimensions=tuple(dimensions), min_episodes=min_episodes, entries_total=len(entries),
         entries_with_somatic_fields=with_fields, somatic=somatic,
@@ -374,6 +387,8 @@ def _render_status(report: ClientReport) -> list[str]:
                  f"здесь шкалы не объединяются")
     lines.append(f"  порог надёжного изменения: {report.threshold:g} — {report.threshold_source}"
                  + _threshold_note(report))
+    if report.threshold_sample_n is not None:
+        lines.append(f"  порог рассчитан на выборке n = {report.threshold_sample_n}")
     if m.caseness is None:
         lines.append(f"  порог «случая»: {m.caseness_source} — «надёжное выздоровление» не определяется")
     else:

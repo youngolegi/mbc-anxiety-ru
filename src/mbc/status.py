@@ -28,7 +28,8 @@ def resolve_threshold(measure: Measure, threshold: float | None) -> float:
     if thr is None:
         raise ValueError(
             f"{measure.code}: нет порога надёжного изменения. "
-            f"Рассчитайте его функцией rci_threshold() на своих данных. "
+            f"Рассчитайте его по своей выборке: threshold_from_sample() "
+            f"(или rci_threshold() по известным SD и надёжности). "
             f"Справка: {measure.reliable_change_source}"
         )
     return thr

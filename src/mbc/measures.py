@@ -90,7 +90,8 @@ PHQ8 = Measure(
     caseness=10,
     caseness_source="Kroenke et al., 2009 — сверить с первоисточником",
     reliable_change=None,
-    reliable_change_source="не установлен — рассчитать rci_threshold() на своих данных",
+    reliable_change_source=("не установлен — рассчитать threshold_from_sample() "
+                            "по своей выборке"),
     russian_version="проверить",
 )
 
