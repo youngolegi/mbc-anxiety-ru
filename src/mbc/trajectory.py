@@ -36,12 +36,12 @@ def rule_based_flag(
     check_by_session: int = 4,
 ) -> TrajectoryFlag:
     """scores — пары (номер сессии, балл). Первая по номеру сессия — базовая линия."""
+    require_client_measure(measure)
     if len(scores) < 2:
         return TrajectoryFlag(Signal.INSUFFICIENT, "нужно минимум два замера", None)
 
     ordered = sorted(scores)
     (_, baseline), (last_session, latest) = ordered[0], ordered[-1]
-    require_client_measure(measure)
     thr = resolve_threshold(measure, threshold)
     change = classify_change(baseline, latest, thr, measure.higher_is_worse)
 

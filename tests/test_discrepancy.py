@@ -11,10 +11,13 @@ import pytest
 from mbc.discrepancy import (ALWAYS_SHOWN, POINTER, QUESTIONS, BlockState, Direction, Discrepancy,
                              Kind, TherapistRating, Window, build_discrepancies, cgis_score,
                              classify_cell)
-from mbc.measures import CGIS, GAD7, MEASURES, PHQ8, PHQ9
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from mbc.measures import CGIS, GAD7, MEASURES, OASIS, PHQ8, PHQ9, WSAS
 from mbc.reliable_change import (Change, ReliabilityKind, SampleThreshold, classify_change,
                                  threshold_from_sample)
 from mbc.report import build_report, render_text
+from mbc.safety import check_safety
 from mbc.scoring import Score, ScoringError, score
 from mbc.status import ScalePair, combined_outcome, outcome
 from mbc.trajectory import rule_based_flag
@@ -113,7 +116,7 @@ def test_therapist_side_uses_direction_not_change():
     d = cell_block(W, N).discrepancies[0]
     assert d.client_change is Change.DETERIORATED and d.therapist_direction is Direction.NONE
     assert isinstance(d.therapist_direction, Direction)
-    assert not any("надёжн" in direction.value for direction in Direction)
+    assert not any("надежн" in direction.value.lower().replace("ё", "е") for direction in Direction)
 
 
 # --- клиентская сторона — та же, что у статуса --------------------------------------
@@ -230,7 +233,7 @@ def test_relapse_after_early_gains_is_seen_by_adjacent_window():
 
 def test_adjacent_window_says_traffic_light_counts_from_baseline():
     lines = block_of(RELAPSE_GAD, RELAPSE_CGI).lines()
-    assert any("светофор и статус считают от базовой линии — сессия 1" in line for line in lines)
+    assert any(line.endswith("; светофор и статус считают по сессиям 1 → 4") for line in lines)
 
 
 def test_adjacent_window_only_for_client_deterioration():
@@ -239,10 +242,27 @@ def test_adjacent_window_only_for_client_deterioration():
     assert block.state is BlockState.NONE_FOUND
 
 
-def test_adjacent_window_skipped_when_base_window_already_shows_deterioration():
+def test_adjacent_window_skipped_when_window_one_already_shows_client_deterioration():
+    # окно 1 уже вывело «самоотчёт хуже, терапевт без сдвига» — окно 2 его не дублирует
+    block = block_of({1: 10, 2: 12, 3: 16}, {1: 3, 2: 3, 3: 3})
+    assert [(d.kind, d.window) for d in block.discrepancies] == \
+        [(Kind.CLIENT_WORSE_UNSEEN, Window.BASE)]
+
+
+def test_agreement_in_window_one_does_not_hide_the_last_step():
+    # от базы оба «хуже» — согласие; на последнем шаге самоотчёт +4, CGI-S без сдвига
     block = block_of({1: 10, 2: 12, 3: 16}, {1: 3, 2: 5, 3: 5})
-    # от базы: клиент хуже, терапевт хуже — согласие; соседнее окно не дублирует ухудшение
-    assert block.state is BlockState.NONE_FOUND
+    assert [(d.kind, d.window) for d in block.discrepancies] == \
+        [(Kind.CLIENT_WORSE_UNSEEN, Window.ADJACENT)]
+
+
+def test_shifted_block_base_does_not_hide_always_shown_kind():
+    # CGI-S с сессии 2: от базы блока (2 → 4) оба «хуже» — согласие, светофор зелёный
+    # (от сессии 1: 20 → 12); на последнем шаге самоотчёт +6, а CGI-S −2 — противоположны
+    block = block_of({1: 20, 2: 4, 3: 6, 4: 12}, {2: 2, 3: 6, 4: 4})
+    assert block.report.flag.signal.name == "GREEN"
+    assert [(d.kind, d.window, d.from_session) for d in block.discrepancies] == \
+        [(Kind.OPPOSITE, Window.ADJACENT, 3)]
 
 
 def test_adjacent_window_needs_three_pairs():
@@ -297,7 +317,9 @@ def test_minor_kinds_collapsed_until_they_persist(kind):
     assert kinds(once) == kinds(twice) == [kind]
     assert once.discrepancies[0].collapsed and not twice.discrepancies[0].collapsed
     collapsed_line = [line for line in once.lines() if "свёрнуто:" in line]
-    assert len(collapsed_line) == 1 and "впервые, разворачивается при повторе" in collapsed_line[0]
+    assert len(collapsed_line) == 1
+    assert collapsed_line[0].endswith("— не держится двух сравнений подряд; развернётся, если "
+                                      "повторится в следующем сравнении")
     assert not any("вопрос для сессии" in line for line in once.lines())
     assert any("вопрос для сессии" in line for line in twice.lines())
 
@@ -659,7 +681,8 @@ def exposure_alts(entries, cell=(W, N)):
 
 def test_exposure_alternative_needs_supporting_trigger_data():
     (alt,) = exposure_alts(APPROACH)
-    assert alt.startswith("Если в эти недели шла экспозиция")
+    assert alt.startswith("Если в недели 07.09–20.09.2026 шла экспозиция")
+    assert "сверить, попадают ли эти недели в окно сравнения" in alt
     assert "избегание 100% → 0% (реакция отмечена в 2 и 2 записях)" in alt
     assert "интенсивность 6 → 5.5" in alt
 
@@ -733,6 +756,7 @@ def every_rendered_block():
                block_of({1: 12, 2: 16}, {1: 4, 2: 4}, entries=APPROACH, min_episodes=3)]
     blocks += [cell_block(*cell) for cell in MATRIX]
     blocks += list(blocks_in_every_state().values())
+    blocks += extra_branch_blocks()
     return blocks
 
 
@@ -745,8 +769,9 @@ def test_no_banned_stems_anywhere_in_the_block():
 def test_therapist_lines_never_say_reliable():
     for block in every_rendered_block():
         for line in block.lines():
-            if "терапевт" in line.lower():
-                assert "надёжн" not in line.lower(), line
+            text = line.lower().replace("ё", "е")
+            if "терапевт" in text:
+                assert "надежн" not in text, line
 
 
 def test_every_alternative_is_modal():
@@ -787,3 +812,250 @@ def test_block_of_another_report_rejected():
                                 cgi_threshold_source=SOURCE)
     with pytest.raises(ValueError, match="другому отчёту"):
         render_text(report_of({1: 12, 2: 15}), block)
+
+
+# --- находки независимого ревью ----------------------------------------------------------
+
+def test_collapsed_line_does_not_claim_first_appearance_after_reset():
+    # 1 → 2: только терапевт; 1 → 3: согласие; 1 → 4: снова только терапевт
+    block = block_of({1: 12, 2: 12, 3: 12, 4: 12}, {1: 4, 2: 6, 3: 5, 4: 6})
+    (d,) = block.discrepancies
+    assert d.collapsed and d.persisted == 1
+    assert not any("впервые" in line for line in block.lines())
+
+
+@pytest.mark.parametrize("ratings,points", [
+    ((3, 4, 4, 5), 1),     # ICC 0,9 → порог 0,72 → 1 балл
+    ((2, 3, 4, 5, 6), 2),  # ICC 0,9 → порог 1,39 → 2 балла
+])
+def test_sample_cgi_threshold_is_not_labelled_heuristic(ratings, points):
+    t = threshold_from_sample([full(v, CGIS) for v in ratings], 0.9, kind=ReliabilityKind.RETEST,
+                              reliability_n=60)
+    assert t.min_change_points == points
+    rep = report_of({1: 12, 2: 16})
+    block = build_discrepancies(rep, [rating(1, 4), rating(2, 4)], cgi_threshold=t,
+                                cgi_threshold_source=None)
+    assert block.cgi_threshold_from_sample
+    line = next(line for line in block.lines() if "порог сдвига оценки терапевта" in line)
+    assert line == f"  порог сдвига оценки терапевта (CGI-S): {points} — {t.source}"
+
+
+def test_manual_cgi_threshold_line_has_source_and_heuristic_label():
+    lines = cell_block(W, N).lines()
+    assert f"  порог сдвига оценки терапевта (CGI-S): 2 — {SOURCE}; эвристика для одного пункта" \
+        in lines
+    assert (f"  порог сдвига оценки терапевта (CGI-S): 1 — {SOURCE}; эвристика для одного пункта; "
+            f"1 балл — только анализ чувствительности") in cell_block(W, N, cgi_threshold=1).lines()
+
+
+@pytest.mark.parametrize("value", [math.inf, math.nan, 0.0, -1.0])
+def test_non_finite_sample_threshold_rejected_with_value_error(value):
+    t = SampleThreshold("CGIS", 5, 0, 4.0, 1.0, 0.5, ReliabilityKind.RETEST, 5, 1.96, 1, 1, value)
+    with pytest.raises(ValueError, match="положительным конечным"):
+        build_discrepancies(report_of({1: 12, 2: 16}), [], cgi_threshold=t,
+                            cgi_threshold_source=None)
+
+
+PHQ9_S1 = [2, 2, 2, 2, 2, 2, 1, 1, 0]
+PHQ9_S2 = [1, 1, 1, 1, 1, 1, 1, 0, 2]   # пункт 9 положительный — синтетический сигнал
+
+
+def phq9_with_alert():
+    scores = [(1, score(PHQ9, PHQ9_S1)), (2, score(PHQ9, PHQ9_S2))]
+    alerts = [(2, a) for a in check_safety(PHQ9, PHQ9_S2)]
+    assert alerts
+    return build_report(PHQ9, scores, safety_alerts=alerts), alerts
+
+
+def test_safety_alerts_of_other_report_must_reach_the_main_header():
+    phq, alerts = phq9_with_alert()
+    rep = report_of({1: 12, 2: 16})                       # шапка: проверка не проводилась
+    with pytest.raises(ValueError, match="сигналы безопасности"):
+        build_discrepancies(rep, [rating(1, 4), rating(2, 4)], cgi_threshold=2,
+                            cgi_threshold_source=SOURCE, other_reports=[phq])
+    rep = report_of({1: 12, 2: 16}, safety_alerts=alerts)  # сигналы — в шапке основного отчёта
+    block = build_discrepancies(rep, [rating(1, 4), rating(2, 4)], cgi_threshold=2,
+                                cgi_threshold_source=SOURCE, other_reports=[phq])
+    assert block.discrepancies[0].others[0].measure == "PHQ9"
+    assert alerts[0][1].message in render_text(rep, block)
+
+
+def test_other_report_checked_without_signals_is_accepted():
+    phq = build_report(PHQ9, [(1, score(PHQ9, PHQ9_S1))], safety_alerts=[])
+    block = block_of({1: 12, 2: 16}, {1: 4, 2: 4}, others=[phq])
+    assert block.other_measures == ("PHQ9",)
+
+
+@pytest.mark.parametrize("scores", [[], [(1, 5)], [(1, 5), (2, 3)]])
+def test_trajectory_rejects_clinician_measure_at_any_length(scores):
+    with pytest.raises(ValueError, match="оценка клинициста"):
+        rule_based_flag(CGIS, scores, threshold=2)
+
+
+def test_blind_compares_aware_timestamps_in_utc():
+    try:
+        berlin = ZoneInfo("Europe/Berlin")
+    except ZoneInfoNotFoundError:
+        pytest.skip("нет системной базы часовых поясов")
+    viewed = datetime(2026, 10, 25, 2, 30, tzinfo=berlin, fold=0)   # 00:30 UTC
+    rated = datetime(2026, 10, 25, 2, 10, tzinfo=berlin, fold=1)    # 01:10 UTC — на 40 мин позже
+    assert not TherapistRating(1, cgis_score(4), rated, viewed).blind
+    assert TherapistRating(1, cgis_score(4), viewed, rated).blind
+
+
+@pytest.mark.parametrize("gad,cgi,window", [
+    ({1: 20, 2: 12, 3: 16}, {2: 4, 3: 4}, "1 → 3"),      # база блока сдвинута
+    ({1: 12, 2: 16, 3: 10}, {1: 4, 2: 4}, "1 → 3"),      # самоотчёт сессии 3 ещё без оценки
+], ids=["сдвиг-базы", "отставание"])
+def test_record_says_which_sessions_the_traffic_light_uses(gad, cgi, window):
+    block = block_of(gad, cgi)
+    lines = record_lines(block)
+    assert lines[0] == f"  1. {POINTER}"
+    assert any(line.endswith(f"; светофор и статус считают по сессиям {window}") for line in lines)
+
+
+def test_record_in_status_window_has_no_traffic_light_note():
+    assert not any("светофор и статус считают" in line for line in cell_block(W, N).lines())
+
+
+@pytest.mark.parametrize("measure,gad,threshold", [(OASIS, {1: 10, 2: 15}, 4),
+                                                   (WSAS, {1: 10, 2: 20}, 8)])
+def test_structural_alternatives_do_not_assume_gad7(measure, gad, threshold):
+    rep = build_report(measure, [(s, full(t, measure)) for s, t in gad.items()],
+                       threshold=threshold, threshold_source=SOURCE)
+    block = build_discrepancies(rep, [rating(1, 4), rating(2, 4)], cgi_threshold=2,
+                                cgi_threshold_source=SOURCE)
+    alts = block.discrepancies[0].alternatives
+    assert not any("две недели" in a or "симптомы" in a for a in alts)
+    assert any(f"самоотчёт — {measure.name_ru}" in a for a in alts)
+    assert any(f"о котором спрашивает {measure.code}" in a for a in alts)
+
+
+def test_plural_sessions_in_record_lines():
+    prorated = score(GAD7, [3, 3, None, 2, 2, 2, 2], max_missing=1)      # 16, пересчитан
+    base = score(GAD7, [2, 2, None, 2, 2, 1, 1], max_missing=1)          # 12, пересчитан
+    rep = build_report(GAD7, [(1, base), (2, full(14)), (3, prorated)])
+    block = build_discrepancies(rep, [rating(s, 4, blind=False) for s in (1, 2, 3)],
+                                cgi_threshold=2, cgi_threshold_source=SOURCE)
+    text = "\n".join(block.lines())
+    assert "пересчитан пропорционально: сессии 1, 3" in text
+    assert "после просмотра самоотчёта: сессии 1, 3" in text
+
+
+def test_of_sessions_agrees_with_numeral():
+    block = block_of({1: 12}, {1: 4})
+    assert any("1 из 1 сессии;" in line for line in block.lines())
+    assert any("2 из 2 сессий;" in line for line in block_of({1: 12, 2: 16}, {1: 4, 2: 4}).lines())
+
+
+def test_other_scale_uses_the_window_of_the_record():
+    phq = build_report(PHQ8, [(s, full(t, PHQ8)) for s, t in {1: 20, 2: 14, 3: 6, 4: 12}.items()],
+                       threshold=5, threshold_source=SOURCE)
+    block = block_of(RELAPSE_GAD, RELAPSE_CGI, others=[phq])
+    (d,) = block.discrepancies
+    (other,) = d.others
+    assert d.window is Window.ADJACENT
+    assert (other.measure, other.start, other.end, other.change) == \
+        ("PHQ8", 6, 12, Change.DETERIORATED)
+
+
+@pytest.mark.parametrize("gad,cgi,note", [
+    ({1: 12, 2: 8}, {1: 2, 2: 3},
+     "улучшение по оценке терапевта (CGI-S) не определяется: в сессии 1 — 2, "
+     "до границы шкалы меньше порога 2"),
+    ({1: 18, 2: 17}, {1: 3, 2: 5},
+     "ухудшение по самоотчёту GAD7 не определяется: в сессии 1 — 18, "
+     "до границы шкалы меньше порога 4"),
+], ids=["CGI-от-базы", "GAD-от-базы"])
+def test_reachability_is_measured_from_the_base(gad, cgi, note):
+    # на конце окна направление достижимо, на базе — нет: решает база
+    block = block_of(gad, cgi)
+    assert block.state is BlockState.NONE_FOUND and note in block.notes
+
+
+LEVELS_LINE = ("  расхождение — тема для разговора, не вердикт; сравниваются направления изменений, "
+               "каждая шкала — сама с собой; уровни не сравниваются, поэтому устойчивое "
+               "расхождение уровней здесь не видно")
+SESSION_ONE = "  база — сессия 1: оценка терапевта на неполной картине"
+
+
+def test_decision_lines_are_printed():
+    for block in (cell_block(N, N), cell_block(W, N)):
+        assert LEVELS_LINE in block.lines() and SESSION_ONE in block.lines()
+    assert SESSION_ONE not in expanded(W, N, start=2).lines()
+    assert "     держится сравнений подряд: 1 (от одной базы — не независимые подтверждения)" \
+        in cell_block(W, N).lines()
+    assert ("     держится сравнений подряд: 1 (соседние окна делят сессии — не независимые "
+            "подтверждения)") in block_of(RELAPSE_GAD, RELAPSE_CGI).lines()
+
+
+def test_blind_line_with_a_single_pair():
+    block = block_of({1: 12, 2: 16}, {1: 4})
+    assert block.state is BlockState.INSUFFICIENT
+    assert (f"{BLIND_LINE}: 0 из 1 в парах; совпадение направлений по ним менее информативно"
+            in block.lines())
+
+
+def test_blind_count_is_over_pairs_only():
+    rep = report_of({1: 12, 2: 13})
+    ratings = [rating(1, 4), rating(2, 4), rating(3, 4, blind=False)]   # сессия 3 без самоотчёта
+    block = build_discrepancies(rep, ratings, cgi_threshold=2, cgi_threshold_source=SOURCE)
+    assert block.non_blind == 0
+    assert any(line.startswith(f"{BLIND_LINE}: 0 из 2 в парах") for line in block.lines())
+
+
+def test_not_counted_rating_without_self_report_is_not_therapist_only():
+    block = block_of({1: 12, 2: 13}, {1: 4, 2: 4, 3: 0})
+    assert block.ratings_not_counted == (3,) and block.therapist_only == ()
+
+
+def test_no_lag_line_when_latest_rating_exists_but_not_counted():
+    block = block_of({1: 12, 2: 13, 3: 16}, {1: 4, 2: 4, 3: 0})
+    assert not any("ещё без оценки" in line for line in block.lines())
+    assert "  оценка терапевта не засчитана: сессия 3" in block.lines()
+
+
+def test_prorated_base_is_marked():
+    base = score(GAD7, [2, 2, None, 2, 2, 1, 1], max_missing=1)          # 10 · 7/6 → 12
+    rep = build_report(GAD7, [(1, base), (2, full(16))])
+    block = build_discrepancies(rep, [rating(1, 4), rating(2, 4)], cgi_threshold=2,
+                                cgi_threshold_source=SOURCE)
+    (d,) = block.discrepancies
+    assert d.client_prorated == (1,)
+    assert any(line.endswith("; пересчитан пропорционально: сессия 1") for line in block.lines())
+
+
+FLAT = [entry(1, 0, 6, Reaction.AVOIDED), entry(2, 1, 6, Reaction.AVOIDED),
+        entry(3, 7, 6, Reaction.STAYED), entry(4, 8, 6, Reaction.STAYED)]
+
+
+def test_exposure_alternative_when_intensity_unchanged():
+    assert len(exposure_alts(FLAT)) == 1
+
+
+def test_regression_to_mean_from_session_two():
+    d = expanded(B, N, start=2).discrepancies[0]
+    assert d.from_session == 2 and any("регрессия к среднему" in a for a in d.alternatives)
+
+
+def extra_branch_blocks():
+    """Блоки с ветками вывода, которых нет в матрице: для лексических тестов."""
+    phq = build_report(PHQ8, [(s, full(t, PHQ8)) for s, t in {1: 20, 2: 14, 3: 6, 4: 12}.items()],
+                       threshold=5, threshold_source=SOURCE)
+    phq_partial = build_report(PHQ9, [(1, full(14, PHQ9))])
+    sample = threshold_from_sample([full(v, CGIS) for v in (3, 4, 4, 5)], 0.9,
+                                   kind=ReliabilityKind.RETEST, reliability_n=60)
+    rep = report_of({1: 12, 2: 16})
+    return [
+        block_of(RELAPSE_GAD, RELAPSE_CGI, others=[phq, phq_partial], blind=False),
+        block_of({1: 12, 2: 13, 3: 16}, {1: 4, 2: 0, 3: 4}),                 # код 0
+        block_of({1: 12, 2: 16}, {1: 4, 2: 3}, cgi_threshold=1),
+        build_discrepancies(rep, [rating(1, 4), rating(2, 4)], cgi_threshold=sample,
+                            cgi_threshold_source=None),
+        block_of({1: 2, 2: 3}, {1: 1, 2: 1}), block_of({1: 19, 2: 18}, {1: 7, 2: 7}),  # пол, потолок
+        block_of({1: 14, 2: 12, 3: 16}, {2: 4, 3: 4}),                       # база сдвинута
+        block_of({1: 12, 2: 16, 3: 10}, {1: 4, 2: 4}),                       # отставание
+        block_of({1: 20, 2: 4, 3: 6, 4: 12}, {2: 2, 3: 6, 4: 4}),            # окно 2 при сдвиге
+        block_of({1: 12, 2: 12, 3: 12, 4: 12}, {1: 4, 2: 6, 3: 5, 4: 6}),    # свёрнуто
+        block_of({1: 12, 2: 16}, {1: 4, 3: 4}),                              # без пары
+    ]

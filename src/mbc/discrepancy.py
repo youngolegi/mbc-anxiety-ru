@@ -21,15 +21,16 @@ Direction по порогу cgi_threshold (эвристика): слово «н�
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Iterable
 
 from .measures import CGIS, Measure
 from .reliable_change import (Change, ReliabilityKind, SampleThreshold, classify_change,
                               min_change_points)
-from .report import ClientReport, PatternSummary, SessionScore, _check_session
+from .report import ClientReport, PatternSummary, SessionScore, _check_session, _week_span
 from .scoring import Score, score
 
 
@@ -104,8 +105,17 @@ class TherapistRating:
 
     @property
     def blind(self) -> bool:
-        """Поставлена до просмотра самоотчёта этой сессии; совпадение отметок — не слепая."""
-        return self.report_viewed_at is None or self.rated_at < self.report_viewed_at
+        """Поставлена до просмотра самоотчёта этой сессии; совпадение отметок — не слепая.
+
+        Отметки с часовым поясом сравниваются в UTC: при одном tzinfo Python сравнивает
+        время на часах и в час перевода стрелок ошибся бы.
+        """
+        if self.report_viewed_at is None:
+            return True
+        rated, viewed = self.rated_at, self.report_viewed_at
+        if rated.utcoffset() is not None and viewed.utcoffset() is not None:
+            rated, viewed = rated.astimezone(timezone.utc), viewed.astimezone(timezone.utc)
+        return rated < viewed
 
     @property
     def counted(self) -> bool:
@@ -182,6 +192,8 @@ class DiscrepancyBlock:
     """Оценок после просмотра самоотчёта среди пар."""
     cgi_threshold: int
     cgi_threshold_source: str
+    cgi_threshold_from_sample: bool
+    """Порог рассчитан по выборке (ICC ретеста), а не передан вручную как эвристика."""
     discrepancies: tuple[Discrepancy, ...]
     notes: tuple[str, ...]
     """Какие направления не определяются (пол и потолок шкалы) и почему."""
@@ -242,11 +254,12 @@ def build_discrepancies(report: ClientReport, ratings: Iterable[TherapistRating]
     if not isinstance(report, ClientReport):
         raise ValueError("Нужен ClientReport: клиентская сторона берётся из отчёта")
     cgi, cgi_source = _cgi_threshold(cgi_threshold, cgi_threshold_source)
+    from_sample = isinstance(cgi_threshold, SampleThreshold)
     others = _others(report, other_reports)
     codes = tuple(o.measure.code for o in others)
     if ratings is None:
         return DiscrepancyBlock(report, BlockState.NOT_PROVIDED, (), len(report.history), (), (),
-                                (), 0, cgi, cgi_source, (), (), codes)
+                                (), 0, cgi, cgi_source, from_sample, (), (), codes)
 
     ratings = _ratings(tuple(ratings))
     client = {h.session: h for h in report.counted}
@@ -260,7 +273,8 @@ def build_discrepancies(report: ClientReport, ratings: Iterable[TherapistRating]
         therapist_only=tuple(sorted(counted.keys() - client.keys())),
         ratings_not_counted=tuple(sorted(s for s, r in by_session.items() if not r.counted)),
         non_blind=sum(not p.rating.blind for p in pairs),
-        cgi_threshold=cgi, cgi_threshold_source=cgi_source, other_measures=codes,
+        cgi_threshold=cgi, cgi_threshold_source=cgi_source,
+        cgi_threshold_from_sample=from_sample, other_measures=codes,
     )
     if len(pairs) < 2:
         return DiscrepancyBlock(state=BlockState.INSUFFICIENT, discrepancies=(), notes=(),
@@ -273,8 +287,11 @@ def build_discrepancies(report: ClientReport, ratings: Iterable[TherapistRating]
     if current.kind is not None:
         found.append(_discrepancy(report, others, Window.BASE, pairs[0], pairs[-1], current,
                                   _persisted(base_cmp)))
-    if len(pairs) >= 3 and current.client is not Direction.WORSE:
-        # окно 2 — только для ухудшения клиента: рецидив после ранних успехов от базы не виден
+    # окно 2 — только для ухудшения клиента: рецидив после ранних успехов от базы не виден.
+    # Пропускается, только если окно 1 уже вывело запись с ухудшением клиента; согласие в окне 1
+    # (терапевт тоже видит ухудшение от базы) не скрывает расхождение на последнем шаге
+    window1_shows_worse = current.kind is not None and current.client is Direction.WORSE
+    if len(pairs) >= 3 and not window1_shows_worse:
         adjacent = [_compare(report, a, b, cgi) for a, b in zip(pairs, pairs[1:])]
         last = adjacent[-1]
         if last.client is Direction.WORSE:
@@ -299,6 +316,11 @@ def _cgi_threshold(threshold: object, source: object) -> tuple[int, str]:
         if threshold.kind is not ReliabilityKind.RETEST:
             raise ValueError(f"{CGIS.code}: у одного пункта {threshold.kind.value} не определён — "
                              f"только ICC ретеста")
+        value = threshold.threshold
+        if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                or not math.isfinite(value) or value <= 0:
+            raise ValueError(f"Порог CGI-S должен быть положительным конечным числом, "
+                             f"получено {value!r}")
         points, source = threshold.min_change_points, threshold.source
     else:
         if isinstance(threshold, bool) or not isinstance(threshold, int):
@@ -322,6 +344,13 @@ def _others(report: ClientReport, other_reports: Iterable[ClientReport]) -> tupl
         if other.measure.code in codes:
             raise ValueError(f"Шкала {other.measure.code} уже есть: каждая шкала — один раз, "
                              f"и не шкала самого отчёта")
+        lost = set(other.safety_alerts or ()) - set(report.safety_alerts or ())
+        if lost:
+            # правило 5: место сигналов — шапка основного отчёта; блок их не показывает
+            raise ValueError(f"В отчёте {other.measure.code} есть сигналы безопасности, которых "
+                             f"нет в шапке основного отчёта (сессии "
+                             f"{', '.join(map(str, sorted({s for s, _ in lost})))}): передайте их "
+                             f"в safety_alerts отчёта {report.measure.code}")
         codes.append(other.measure.code)
     return others
 
@@ -485,10 +514,10 @@ def _other_scale(other: ClientReport, start: int, end: int) -> OtherScale:
 def _alternatives(report: ClientReport, kind: Kind, client: Direction, therapist: Direction,
                   from_session: int) -> tuple[str, ...]:
     alts = [_literal(kind, client, therapist),
-            "Возможно, дело в разных окнах: самоотчёт охватывает последние две недели, "
-            "оценка терапевта — состояние на сессии.",
-            f"Возможно, стороны измеряют разное: самоотчёт — симптомы по шкале "
-            f"{report.measure.code}, CGI-S — общее клиническое впечатление о тяжести."]
+            f"Возможно, дело в разных окнах: самоотчёт — за период, о котором спрашивает "
+            f"{report.measure.code}, оценка терапевта — состояние на сессии.",
+            f"Возможно, стороны измеряют разное: самоотчёт — {report.measure.name_ru}, "
+            f"CGI-S — общее клиническое впечатление о тяжести."]
     if therapist is Direction.NONE:
         alts.append("Может быть, шаг однопунктовой оценки слишком крупный, чтобы отразить "
                     "такое изменение.")
@@ -535,8 +564,9 @@ def _approaching(p: PatternSummary) -> bool:
 
 def _exposure(p: PatternSummary) -> str:
     first, last = p.weeks[0], p.weeks[-1]
-    return (f"Если в эти недели шла экспозиция, дистресс мог временно вырасти — проверить "
-            f"по карте триггеров: «{p.label}», избегание {first.avoidance_rate:.0%} → "
+    return (f"Если в недели {_week_span(first.week, last.week)} шла экспозиция, дистресс мог "
+            f"временно вырасти — сверить, попадают ли эти недели в окно сравнения: «{p.label}», "
+            f"избегание {first.avoidance_rate:.0%} → "
             f"{last.avoidance_rate:.0%} (реакция отмечена в {p.reactions_marked[0]} и "
             f"{p.reactions_marked[-1]} записях), интенсивность {first.mean_intensity:g} → "
             f"{last.mean_intensity:g}.")
@@ -564,7 +594,8 @@ def _render(block: DiscrepancyBlock) -> list[str]:
              "каждая шкала — сама с собой; уровни не сравниваются, поэтому устойчивое расхождение "
              "уровней здесь не видно",
              f"  пары (засчитаны и самоотчёт, и оценка терапевта): {len(pairs)} из "
-             f"{block.sessions_total} сессий; пропуски могут быть неслучайными"]
+             f"{block.sessions_total} {_of_sessions(block.sessions_total)}; пропуски могут быть "
+             f"неслучайными"]
     if block.client_only:
         lines.append(f"  самоотчёт без оценки терапевта: {_sessions(block.client_only)}")
     if block.ratings_not_counted:
@@ -597,9 +628,13 @@ def _comparison_context(block: DiscrepancyBlock) -> list[str]:
     if pairs[0] == 1:
         lines.append("  база — сессия 1: оценка терапевта на неполной картине")
     lines.append(f"  порог по самоотчёту — как у статуса: {r.threshold:g} — {r.threshold_source}")
-    sensitivity = "; 1 балл — только анализ чувствительности" if block.cgi_threshold == 1 else ""
+    if block.cgi_threshold_from_sample:
+        label = ""
+    else:
+        label = "; эвристика для одного пункта" + (
+            "; 1 балл — только анализ чувствительности" if block.cgi_threshold == 1 else "")
     lines.append(f"  порог сдвига оценки терапевта (CGI-S): {block.cgi_threshold} — "
-                 f"{block.cgi_threshold_source}; эвристика для одного пункта{sensitivity}")
+                 f"{block.cgi_threshold_source}{label}")
     lines += [f"  {note}" for note in block.notes]
     if not block.other_measures:
         lines.append(f"  другие самоотчёты не переданы — сравнение только со шкалой отчёта "
@@ -618,15 +653,19 @@ def _blind_line(block: DiscrepancyBlock) -> str:
 def _render_one(i: int, d: Discrepancy, block: DiscrepancyBlock) -> list[str]:
     title = f"{d.kind.value} · сессии {d.from_session} → {d.to_session} ({d.window.value})"
     if d.collapsed:
-        return [f"  {i}. свёрнуто: {title} — впервые, разворачивается при повторе"]
+        return [f"  {i}. свёрнуто: {title} — не держится двух сравнений подряд; развернётся, "
+                f"если повторится в следующем сравнении"]
     code = block.report.measure.code
     lines = ([f"  {i}. {POINTER}", f"     {title}"] if d.client_change is Change.DETERIORATED
              else [f"  {i}. {title}"])
-    prorated = (f"; пересчитан пропорционально: сессия {', '.join(map(str, d.client_prorated))}"
+    prorated = (f"; пересчитан пропорционально: {_sessions(d.client_prorated)}"
                 if d.client_prorated else "")
-    base = block.report.baseline
-    relative = (f"; светофор и статус считают от базовой линии — сессия {base.session}"
-                if d.window is Window.ADJACENT and base is not None else "")
+    base, latest = block.report.baseline, block.report.latest
+    # светофор и статус считают от базовой линии до последнего замера — если окно записи
+    # другое, это сказано прямо: иначе «надёжное ухудшение» при зелёном светофоре сбивает
+    relative = (f"; светофор и статус считают по сессиям {base.session} → {latest.session}"
+                if base is not None and latest is not None
+                and (d.from_session, d.to_session) != (base.session, latest.session) else "")
     lines.append(f"     самоотчёт {code}: {d.client_start} → {d.client_end} "
                  f"({_delta(d.client_end - d.client_start)}), {d.client_change.value} "
                  f"(порог {block.report.threshold:g}){prorated}{relative}")
@@ -634,7 +673,7 @@ def _render_one(i: int, d: Discrepancy, block: DiscrepancyBlock) -> list[str]:
     direction = (f"сдвиг меньше порога {thr}" if d.therapist_direction is Direction.NONE
                  else f"{d.therapist_direction.value} (порог {thr})")
     blind = ("обе оценки — до просмотра самоотчёта" if d.blind
-             else f"после просмотра самоотчёта: сессия {', '.join(map(str, d.non_blind))}")
+             else f"после просмотра самоотчёта: {_sessions(d.non_blind)}")
     lines.append(f"     оценка терапевта CGI-S: {d.therapist_start} → {d.therapist_end} "
                  f"({_delta(d.therapist_end - d.therapist_start)}), {direction}; {blind}")
     caveat = ("от одной базы" if d.window is Window.BASE else "соседние окна делят сессии")
@@ -665,3 +704,8 @@ def _delta(value: int) -> str:
 
 def _sessions(sessions: tuple[int, ...]) -> str:
     return ("сессия " if len(sessions) == 1 else "сессии ") + ", ".join(map(str, sessions))
+
+
+def _of_sessions(n: int) -> str:
+    """Форма после «из N»: из 1 сессии, из 5 сессий."""
+    return "сессии" if n % 10 == 1 and n % 100 != 11 else "сессий"
