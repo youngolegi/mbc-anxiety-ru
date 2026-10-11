@@ -8,8 +8,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from mbc.hypotheses import Hypothesis, evidence_for_pattern  # noqa: E402
+from mbc.discrepancy import TherapistRating, build_discrepancies, cgis_score  # noqa: E402
+from mbc.hypotheses import Hypothesis, evidence_for_pattern, verify_evidence  # noqa: E402
 from mbc.measures import GAD7, PHQ8  # noqa: E402
+from mbc.report import build_report, render_text  # noqa: E402
 from mbc.scoring import score  # noqa: E402
 from mbc.status import outcome  # noqa: E402
 from mbc.trajectory import rule_based_flag  # noqa: E402
@@ -30,10 +32,12 @@ gad7_by_session = {
     6: [1, 1, 1, 1, 1, 1, 1],
 }
 history: list[tuple[int, int]] = []
+gad7_scores = []
 print("\nGAD-7 по сессиям:")
 for session, answers in gad7_by_session.items():
     s = score(GAD7, answers)
     history.append((session, s.total))
+    gad7_scores.append((session, s))
     flag = rule_based_flag(GAD7, history)
     print(f"  сессия {session}: {s.total:>2} ({s.severity:<11}) → {flag.signal.value}: {flag.reason}")
 
@@ -90,4 +94,22 @@ hypothesis = Hypothesis(
     alternative="Совпадение с недосыпом и вечерним временем, а не содержание разговора",
     check_question="Что именно в этих разговорах запускает тревогу — тема, тон, ожидание звонка?",
 )
+verify_evidence(hypothesis, entries, top)  # опора существует в записях, иначе ValueError
 print("\n" + hypothesis.render())
+
+# --- 4. Отчёт для терапевта и слой расхождений ----------------------------------
+# PHQ-8 не содержит пункта безопасности: проверка не проводилась → safety_alerts=None
+report = build_report(GAD7, gad7_scores, entries)
+
+# CGI-S терапевта после каждой сессии. Слепая — поставлена до просмотра самоотчёта
+# этой сессии (отметки времени ставит система); здесь слепа только оценка сессии 1.
+session_day = datetime(2026, 9, 7, 19, 0)
+ratings = []
+for session, code in {1: 4, 2: 4, 3: 4, 4: 4, 5: 4, 6: 4}.items():
+    rated_at = session_day + timedelta(days=7 * (session - 1), minutes=55)
+    viewed_at = None if session == 1 else rated_at - timedelta(minutes=60)
+    ratings.append(TherapistRating(session, cgis_score(code), rated_at, viewed_at))
+discrepancies = build_discrepancies(report, ratings, cgi_threshold=2,
+                                    cgi_threshold_source="эвристика docs/06, решение 4")
+print("\n" + "=" * 64)
+print(render_text(report, discrepancies))

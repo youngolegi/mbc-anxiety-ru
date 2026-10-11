@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Sequence
 
-from .measures import Measure
+from .measures import Measure, require_client_measure
 from .reliable_change import Change, classify_change
 from .status import resolve_threshold
 
@@ -36,6 +36,7 @@ def rule_based_flag(
     check_by_session: int = 4,
 ) -> TrajectoryFlag:
     """scores — пары (номер сессии, балл). Первая по номеру сессия — базовая линия."""
+    require_client_measure(measure)
     if len(scores) < 2:
         return TrajectoryFlag(Signal.INSUFFICIENT, "нужно минимум два замера", None)
 

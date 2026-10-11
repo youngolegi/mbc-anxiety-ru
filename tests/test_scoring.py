@@ -44,3 +44,21 @@ def test_bool_is_not_a_valid_answer():
 
 def test_get_measure_accepts_dash():
     assert get_measure("gad-7") is GAD7
+
+
+@pytest.mark.parametrize("answers,expected", [
+    ([0, 1, 2, 2, 2, 2, None], 11),   # 9 / 6 × 7 = 10.5 → 11, а не 10 (round к чётному)
+    ([3, 3, 3, 2, 2, 2, None], 18),   # 15 / 6 × 7 = 17.5 → 18
+    ([1, 1, 1, 0, 0, 0, None], 4),    # 3 / 6 × 7 = 3.5 → 4
+    ([2, 2, 2, 2, 1, 1, None], 12),   # 10 / 6 × 7 ≈ 11.67 → 12
+    ([2, 2, 2, 1, 1, 1, None], 11),   # 9 / 6 × 7 = 10.5 → 11 (другая раскладка той же суммы)
+])
+def test_prorating_rounds_half_up(answers, expected):
+    result = score(GAD7, answers, max_missing=1)
+    assert result.total == expected and result.prorated
+
+
+def test_every_severity_band_has_source():
+    # правило 3: границы тяжести — тоже пороги
+    from mbc.measures import MEASURES
+    assert all(m.severity_source for m in MEASURES.values() if m.severity_bands)

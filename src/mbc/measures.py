@@ -30,10 +30,14 @@ class Measure:
     reliable_change_source: str = ""
     severity_bands: tuple[tuple[int, str], ...] = ()
     """Пары (нижняя граница, метка), по возрастанию."""
+    severity_source: str = ""
+    """Источник границ тяжести: это тоже пороги."""
     safety_items: tuple[int, ...] = ()
     """Номера пунктов (с 1), положительный ответ на которые требует протокола безопасности."""
     russian_version: str = ""
     verified_ru_thresholds: bool = False
+    rater: str = "client"
+    """Кто заполняет: «client» — самоотчёт, «clinician» — оценка терапевта."""
 
     @property
     def min_total(self) -> int:
@@ -62,6 +66,7 @@ GAD7 = Measure(
     reliable_change=4,
     reliable_change_source="NHS Talking Therapies",
     severity_bands=((0, "минимальная"), (5, "лёгкая"), (10, "умеренная"), (15, "тяжёлая")),
+    severity_source="Spitzer et al., 2006",
     russian_version="Золотарева А.А., 2023, Консультативная психология и психотерапия 31(4):31–46",
 )
 
@@ -75,6 +80,7 @@ PHQ9 = Measure(
     reliable_change_source="NHS Talking Therapies",
     severity_bands=((0, "минимальная"), (5, "лёгкая"), (10, "умеренная"),
                     (15, "умеренно тяжёлая"), (20, "тяжёлая")),
+    severity_source="Kroenke et al., 2001",
     safety_items=(9,),
     russian_version="используется; конкретную адаптацию выбрать",
 )
@@ -86,7 +92,8 @@ PHQ8 = Measure(
     caseness=10,
     caseness_source="Kroenke et al., 2009 — сверить с первоисточником",
     reliable_change=None,
-    reliable_change_source="не установлен — рассчитать rci_threshold() на своих данных",
+    reliable_change_source=("не установлен — рассчитать threshold_from_sample() "
+                            "по своей выборке"),
     russian_version="проверить",
 )
 
@@ -114,7 +121,23 @@ WSAS = Measure(
     russian_version="нет — кандидат на адаптацию (вторая волна)",
 )
 
-MEASURES: dict[str, Measure] = {m.code: m for m in (GAD7, PHQ9, PHQ8, OASIS, WSAS)}
+# Оценка терапевта для слоя расхождений (docs/06). Guy, 1976 (ECDEU Assessment Manual) —
+# сверить с первоисточником. Порядковая шкала 1–7, 7 — тяжелее всего; тексты якорей
+# не хранятся (правило 2). Код 0 («не оценивалось») переводится в пропуск при приёме.
+CGIS = Measure(
+    code="CGIS",
+    name_ru="Общее клиническое впечатление — тяжесть (CGI-S), оценка терапевта",
+    n_items=1, item_min=1, item_max=7,
+    caseness=None,
+    caseness_source="не задан — уровни с самоотчётом не сравниваются",
+    reliable_change=None,
+    reliable_change_source=("не установлен для одного пункта — порог изменения передаётся "
+                            "явно с источником (эвристика)"),
+    russian_version="проверенной нет — проверить",
+    rater="clinician",
+)
+
+MEASURES: dict[str, Measure] = {m.code: m for m in (GAD7, PHQ9, PHQ8, OASIS, WSAS, CGIS)}
 
 
 def get_measure(code: str) -> Measure:
@@ -123,3 +146,9 @@ def get_measure(code: str) -> Measure:
         return MEASURES[key]
     except KeyError as exc:
         raise KeyError(f"Неизвестная шкала: {code}. Доступны: {', '.join(MEASURES)}") from exc
+
+
+def require_client_measure(measure: Measure) -> None:
+    """Статус, траектория и отчёт считаются только по самоотчёту клиента."""
+    if measure.rater != "client":
+        raise ValueError(f"{measure.code} — оценка клинициста; здесь нужна шкала самоотчёта")
