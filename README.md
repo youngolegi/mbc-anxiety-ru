@@ -30,6 +30,7 @@
 | Карта триггеров: ABC-записи, паттерны, недельная динамика | `src/mbc/triggers.py` | ✅ |
 | Контракт гипотез ИИ с обязательной альтернативой | `src/mbc/hypotheses.py`, `prompts/` | ✅ без вызова модели |
 | Отчёт для терапевта: светофор, статус, паттерны, телесные факторы | `src/mbc/report.py` | ✅ |
+| Слой расхождений «самоотчёт × CGI-S терапевта» — темы для разговора, не вердикт | `src/mbc/discrepancy.py`, `docs/06_discrepancy_spec.md` | ✅ тексты альтернатив — черновик |
 | Реестр 51 методики (рус. и зап.) + калькулятор RCI | `docs/03_measures_registry.*` | ✅ |
 | Протокол межкультурной адаптации OASIS (ITC 2017) | `docs/04_…`, `research/oasis_stage0/` | этап 0 подготовлен |
 | Гайд глубинных интервью с терапевтами | `docs/01_therapist_interviews.md` | готов к полю |
@@ -61,7 +62,7 @@ flowchart TD
 git clone https://github.com/youngolegi/mbc-anxiety-ru.git
 cd mbc-anxiety-ru
 python -m pip install -e ".[dev]"
-pytest -q                 # 205 тестов
+pytest -q                 # 360 тестов
 python examples/demo.py   # демонстрация на синтетических данных
 ```
 

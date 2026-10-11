@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Sequence
 
-from .measures import Measure
+from .measures import Measure, require_client_measure
 from .reliable_change import Change, classify_change
 from .status import resolve_threshold
 
@@ -41,6 +41,7 @@ def rule_based_flag(
 
     ordered = sorted(scores)
     (_, baseline), (last_session, latest) = ordered[0], ordered[-1]
+    require_client_measure(measure)
     thr = resolve_threshold(measure, threshold)
     change = classify_change(baseline, latest, thr, measure.higher_is_worse)
 

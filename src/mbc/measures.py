@@ -36,6 +36,8 @@ class Measure:
     """Номера пунктов (с 1), положительный ответ на которые требует протокола безопасности."""
     russian_version: str = ""
     verified_ru_thresholds: bool = False
+    rater: str = "client"
+    """Кто заполняет: «client» — самоотчёт, «clinician» — оценка терапевта."""
 
     @property
     def min_total(self) -> int:
@@ -119,7 +121,23 @@ WSAS = Measure(
     russian_version="нет — кандидат на адаптацию (вторая волна)",
 )
 
-MEASURES: dict[str, Measure] = {m.code: m for m in (GAD7, PHQ9, PHQ8, OASIS, WSAS)}
+# Оценка терапевта для слоя расхождений (docs/06). Guy, 1976 (ECDEU Assessment Manual) —
+# сверить с первоисточником. Порядковая шкала 1–7, 7 — тяжелее всего; тексты якорей
+# не хранятся (правило 2). Код 0 («не оценивалось») переводится в пропуск при приёме.
+CGIS = Measure(
+    code="CGIS",
+    name_ru="Общее клиническое впечатление — тяжесть (CGI-S), оценка терапевта",
+    n_items=1, item_min=1, item_max=7,
+    caseness=None,
+    caseness_source="не задан — уровни с самоотчётом не сравниваются",
+    reliable_change=None,
+    reliable_change_source=("не установлен для одного пункта — порог изменения передаётся "
+                            "явно с источником (эвристика)"),
+    russian_version="проверенной нет — проверить",
+    rater="clinician",
+)
+
+MEASURES: dict[str, Measure] = {m.code: m for m in (GAD7, PHQ9, PHQ8, OASIS, WSAS, CGIS)}
 
 
 def get_measure(code: str) -> Measure:
@@ -128,3 +146,9 @@ def get_measure(code: str) -> Measure:
         return MEASURES[key]
     except KeyError as exc:
         raise KeyError(f"Неизвестная шкала: {code}. Доступны: {', '.join(MEASURES)}") from exc
+
+
+def require_client_measure(measure: Measure) -> None:
+    """Статус, траектория и отчёт считаются только по самоотчёту клиента."""
+    if measure.rater != "client":
+        raise ValueError(f"{measure.code} — оценка клинициста; здесь нужна шкала самоотчёта")

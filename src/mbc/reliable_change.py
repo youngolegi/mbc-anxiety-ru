@@ -169,6 +169,9 @@ def threshold_from_sample(scores: Iterable[Score], reliability: float, *,
         raise ValueError(f"Нужно минимум два полных замера, есть {len(complete)} "
                          f"(исключено неполных: {excluded})")
     measure = get_measure(codes.pop())
+    if measure.n_items == 1 and kind is not ReliabilityKind.RETEST:
+        raise ValueError(f"{measure.code}: у шкалы из одного пункта {kind.value} не определён — "
+                         f"только ретестовая надёжность")
     for total in complete:
         if isinstance(total, bool) or not isinstance(total, int) \
                 or not measure.min_total <= total <= measure.max_total:

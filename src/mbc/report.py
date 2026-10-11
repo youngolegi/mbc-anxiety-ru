@@ -27,9 +27,9 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Iterable, Sequence
+from typing import TYPE_CHECKING, Iterable, Sequence
 
-from .measures import Measure
+from .measures import Measure, require_client_measure
 from .safety import SafetyAlert
 from .scoring import Score
 from .reliable_change import SampleThreshold
@@ -37,6 +37,9 @@ from .status import Outcome, outcome, resolve_threshold
 from .trajectory import Signal, TrajectoryFlag, rule_based_flag
 from .triggers import (DIMENSIONS, Pattern, TriggerEntry, WeekStat, find_patterns,
                        pattern_change, somatic_confounders, weekly_progress)
+
+if TYPE_CHECKING:
+    from .discrepancy import DiscrepancyBlock
 
 SIGNAL_LABELS = {
     Signal.GREEN: "ЗЕЛЁНЫЙ",
@@ -156,6 +159,7 @@ def build_report(
     threshold_source: каждый порог в отчёте — с источником. Порог, рассчитанный
     threshold_from_sample(), передаётся целиком: источник и n берутся из расчёта.
     """
+    require_client_measure(measure)
     if top_n < 1:
         raise ValueError("top_n должен быть не меньше 1")
     if min_episodes < 2:
@@ -274,8 +278,14 @@ def _summarise(entries: tuple[TriggerEntry, ...], pattern: Pattern,
 
 # --- текст ----------------------------------------------------------------------
 
-def render_text(report: ClientReport) -> str:
-    """Текст отчёта для терапевта. Порядок блоков: безопасность — первой."""
+def render_text(report: ClientReport, discrepancies: DiscrepancyBlock | None = None) -> str:
+    """Текст отчёта для терапевта. Порядок блоков: безопасность — первой.
+
+    discrepancies — блок расхождений (discrepancy.build_discrepancies) по этому же отчёту;
+    печатается после статуса и на светофор и шапку безопасности не влияет.
+    """
+    if discrepancies is not None and discrepancies.report != report:
+        raise ValueError("Блок расхождений построен по другому отчёту")
     period = (f"сессии {report.history[0].session}–{report.history[-1].session}"
               if report.history else "замеров нет")
     lines = [
@@ -289,6 +299,7 @@ def render_text(report: ClientReport) -> str:
         *_render_flag(report),
         "",
         *_render_status(report),
+        *(["", *discrepancies.lines()] if discrepancies is not None else []),
         "",
         *_render_patterns(report),
         "",

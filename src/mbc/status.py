@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from .measures import Measure
+from .measures import Measure, require_client_measure
 from .reliable_change import Change, classify_change
 
 
@@ -36,6 +36,7 @@ def resolve_threshold(measure: Measure, threshold: float | None) -> float:
 
 
 def outcome(measure: Measure, x1: int, x2: int, threshold: float | None = None) -> Outcome:
+    require_client_measure(measure)
     thr = resolve_threshold(measure, threshold)
     change = classify_change(x1, x2, thr, measure.higher_is_worse)
 
@@ -140,6 +141,7 @@ def combined_outcome(anxiety: ScalePair, depression: ScalePair, *,
 
 def _check_pair(pair: ScalePair) -> None:
     m = pair.measure
+    require_client_measure(m)
     if m.caseness is None:
         raise ValueError(f"{m.code}: для статуса по двум шкалам нужен порог «случая». "
                          f"Справка: {m.caseness_source}")
