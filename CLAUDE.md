@@ -65,7 +65,7 @@ src/mbc/
   hypotheses.py       контракт гипотез ИИ
   report.py           отчёт для терапевта: светофор, статус, паттерны, телесные факторы
   discrepancy.py      слой расхождений: самоотчёт × CGI-S терапевта, темы для разговора
-tests/                pytest, 394 теста
+tests/                pytest, 400 тестов
 examples/demo.py      синтетический клиент
 tools/                мутационная проверка слоя расхождений (mutants_discrepancy.py)
 prompts/              шаблон промпта ИИ-слоя

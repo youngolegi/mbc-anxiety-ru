@@ -2,10 +2,13 @@
 
 Запуск из корня репозитория:  python tools/mutants_discrepancy.py
 
-Каждый мутант — одна точечная замена в копии репозитория (во временной папке; сам
-репозиторий не меняется). Мутант «убит», если после замены падает хотя бы один тест.
+Каждый мутант — одна точечная замена в копии кода (во временной папке; сам репозиторий
+не меняется). Копируются только src/, tests/ и pyproject.toml: данные и секреты, даже
+игнорируемые git, в копию не попадают. Сначала тесты прогоняются без мутаций — если они
+не зелёные, проверка останавливается. Мутант «убит», только если pytest завершился кодом 1
+(тесты упали); любой другой код — ошибка окружения, проверка останавливается.
 Эквивалентные мутанты (поведение не меняется) помечены и в итог не идут.
-Код возврата 1 — если выжил хотя бы один неэквивалентный мутант.
+Код возврата: 0 — все неэквивалентные убиты; 1 — кто-то выжил; 2 — ошибка проверки.
 """
 from __future__ import annotations
 
@@ -55,20 +58,21 @@ MUTANTS = [
     ("пометки о поле и потолке на базе пропали", D,
      "    notes = _unreachable_notes(report, pairs[0], cgi)", "    notes = ()", False),
     ("пометка о поле и потолке в окне 2 пропала", D,
-     "                notes += (last.suppressed,)", "                pass", False),
+     "            elif last.suppressed:\n", "            elif False:\n", False),
     # окна
-    ("окно 2 выключено", D,
-     "    if len(pairs) >= 3 and not window1_shows_worse:", "    if False:", False),
+    ("окно 2 выключено", D, "    if len(pairs) >= 3:\n", "    if False:\n", False),
     ("окно 2 для любого направления клиента", D,
      "        if last.client is Direction.WORSE:", "        if True:", False),
-    ("окно 2 пропускается при любом ухудшении от базы блока", D,
-     "    window1_shows_worse = current.kind is not None and current.client is Direction.WORSE",
-     "    window1_shows_worse = current.client is Direction.WORSE", False),
     ("окно 2 дублирует запись окна 1", D,
-     "    window1_shows_worse = current.kind is not None and current.client is Direction.WORSE",
-     "    window1_shows_worse = False", False),
-    ("окно 2 при двух парах", D,
-     "    if len(pairs) >= 3 and", "    if len(pairs) >= 2 and", True),
+     "if last.kind is not None and last.signature != current.signature:",
+     "if last.kind is not None:", False),
+    ("окно 2 скрыто при любой записи окна 1", D,
+     "if last.kind is not None and last.signature != current.signature:",
+     "if last.kind is not None and current.kind is None:", False),
+    ("окно 2 при двух парах", D, "    if len(pairs) >= 3:\n", "    if len(pairs) >= 2:\n", False),
+    ("пометка окна 2 без стороны клиента", D,
+     "                          f\"{last.client_change.value}\",\n                          f\"↳ {last.suppressed}\")",
+     "                          f\"\",\n                          f\"↳ {last.suppressed}\")", False),
     # persisted и свёртка
     ("persisted всегда 1", D, "        n += 1\n", "        n = 1\n", False),
     ("подпись без направлений", D,
@@ -138,6 +142,12 @@ MUTANTS = [
      "if block.cgi_threshold == 1 else \"\")", "if False else \"\")", False),
     ("порог из выборки помечен эвристикой", D,
      "    if block.cgi_threshold_from_sample:\n", "    if False:\n", False),
+    ("расчётное значение порога не печатается", D,
+     "        value = (f\"{block.cgi_threshold} (расчёт {block.cgi_threshold_raw:.3g}; в баллах — \"\n"
+     "                 f\"вверх до целого)\")",
+     "        value = str(block.cgi_threshold)", False),
+    ("отметки вне диапазона — OverflowError", D,
+     "        except (TypeError, OverflowError) as exc:", "        except TypeError as exc:", False),
     ("источник порога CGI-S не печатается", D,
      "f\"{block.cgi_threshold_source}{label}\")", "f\"{label}\")", False),
     # вывод
@@ -200,9 +210,19 @@ MUTANTS = [
     ("буквальное прочтение не первым", D,
      "    alts = [_literal(kind, client, therapist),",
      "    alts = [\"Возможно, дело в другом.\", _literal(kind, client, therapist),", False),
-    ("окна и конструкт снова под GAD-7", D,
-     "f\"Возможно, стороны измеряют разное: самоотчёт — {report.measure.name_ru}, \"",
-     "f\"Возможно, стороны измеряют разное: самоотчёт — симптомы по шкале \"", False),
+    ("конструкт снова под GAD-7", D,
+     "f\"Возможно, стороны измеряют разное: самоотчёт — шкала {report.measure.code}, \"",
+     "f\"Возможно, стороны измеряют разное: самоотчёт — симптомы по шкале {report.measure.code}, \"",
+     False),
+    ("окно опроса снова «две недели»", D,
+     "f\"{report.measure.code} (период опроса у шкал разный), а оценка терапевта отражает \"",
+     "f\"{report.measure.code} за последние две недели, а оценка терапевта отражает \"", False),
+    ("экспозиция без названия паттерна", D,
+     "f\"Если в недели паттерна «{p.label}» ({_week_span(first.week, last.week)}) шла \"",
+     "f\"Если в недели ({_week_span(first.week, last.week)}) шла \"", False),
+    ("«сессия 1, 3» в отчёте", "src/mbc/report.py",
+     "f\"{_sessions(sorted(set(prorated)))}\")",
+     "f\"сессия {', '.join(map(str, sorted(set(prorated))))}\")", False),
     ("другая шкала — от своей базы, а не из окна", D,
      "    x1, x2 = totals.get(start), totals.get(end)",
      "    x1, x2 = (other.baseline.total if other.baseline else None), totals.get(end)", False),
@@ -228,25 +248,53 @@ MUTANTS = [
 ]
 
 
+COPIED = ("src", "tests", "pyproject.toml")
+"""Всё, что нужно тестам; данные, секреты и окружения не копируются."""
+
+
+def _copy(work: Path) -> None:
+    if work.exists():
+        shutil.rmtree(work)
+    work.mkdir()
+    for name in COPIED:
+        source = ROOT / name
+        if source.is_dir():
+            shutil.copytree(source, work / name,
+                            ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache", "*.egg-info"))
+        else:
+            shutil.copy2(source, work / name)
+
+
+def _pytest(work: Path) -> int:
+    return subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", "tests"],
+        cwd=work, capture_output=True, text=True).returncode
+
+
 def run() -> int:
     survived, killed, equivalent = [], 0, 0
     with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp) / "work"
+        _copy(work)
+        baseline = _pytest(work)
+        if baseline != 0:
+            print(f"ОШИБКА   тесты без мутаций не зелёные (код pytest {baseline}) — проверка "
+                  f"бессмысленна")
+            return 2
         for name, path, old, new, is_equivalent in MUTANTS:
-            work = Path(tmp) / "work"
-            if work.exists():
-                shutil.rmtree(work)
-            shutil.copytree(ROOT, work, ignore=shutil.ignore_patterns(
-                ".git", "__pycache__", ".pytest_cache", "*.egg-info"))
+            _copy(work)
             target = work / path
             source = target.read_text(encoding="utf-8")
             if source.count(old) != 1:
                 print(f"ОШИБКА   {name}: образец найден {source.count(old)} раз — обновите список")
                 return 2
             target.write_text(source.replace(old, new), encoding="utf-8")
-            result = subprocess.run(
-                [sys.executable, "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", "tests"],
-                cwd=work, capture_output=True, text=True)
-            dead = result.returncode != 0
+            code = _pytest(work)
+            if code not in (0, 1):
+                print(f"ОШИБКА   {name}: код pytest {code} — сбой окружения или сбора тестов, "
+                      f"а не упавший тест")
+                return 2
+            dead = code == 1
             if is_equivalent:
                 equivalent += 1
                 print(f"{'убит    ' if dead else 'эквивал.'}  {name}")

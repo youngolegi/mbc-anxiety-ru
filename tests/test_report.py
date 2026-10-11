@@ -402,3 +402,10 @@ def test_report_is_deterministic_and_marked_for_therapist():
     order = [a.index(h) for h in
              ("БЕЗОПАСНОСТЬ", "ЗАМЕРЫ", "СВЕТОФОР", "СТАТУС", "ПАТТЕРНЫ", "ТЕЛЕСНЫЕ")]
     assert order == sorted(order)
+
+
+def test_plural_sessions_when_baseline_and_latest_prorated():
+    prorated = gad(MISSING, max_missing=1)                  # 14, пересчитан
+    text = text_of(GAD7, [(1, prorated), (2, gad(FULL_7)), (3, prorated)])
+    assert "сигнал опирается на пересчитанный пропорционально балл: сессии 1, 3" in text
+    assert "(пересчитан пропорционально: сессии 1, 3)" in text

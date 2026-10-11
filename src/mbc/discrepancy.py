@@ -12,8 +12,9 @@
 
 Клиентская сторона берётся из готового ClientReport: та же базовая линия, тот же
 порог и тот же источник порога, что у светофора и статуса. Сторона терапевта —
-Direction по порогу cgi_threshold (эвристика): слово «надёжное» к оценке из одного
-пункта не применяется.
+Direction по порогу cgi_threshold: слово «надёжное» к оценке из одного пункта не
+применяется. Порог, переданный вручную, — эвристика (2 балла — основной, 1 — анализ
+чувствительности); порог по ICC ретеста (SampleThreshold) — рассчитанный.
 
 Слепота оценки вычисляется по отметкам времени, а не вводится терапевтом: оценка
 слепая, если поставлена до просмотра самоотчёта этой сессии. Прошлые баллы терапевт
@@ -194,6 +195,8 @@ class DiscrepancyBlock:
     cgi_threshold_source: str
     cgi_threshold_from_sample: bool
     """Порог рассчитан по выборке (ICC ретеста), а не передан вручную как эвристика."""
+    cgi_threshold_raw: float | None
+    """Рассчитанное значение до округления вверх; None — порог передан вручную."""
     discrepancies: tuple[Discrepancy, ...]
     notes: tuple[str, ...]
     """Какие направления не определяются (пол и потолок шкалы) и почему."""
@@ -247,19 +250,19 @@ def build_discrepancies(report: ClientReport, ratings: Iterable[TherapistRating]
     ratings=None — оценки не переданы; пустая последовательность — переданы, но их нет.
     cgi_threshold — сдвиг CGI-S в баллах (целое 1–6) с обязательным источником или
     SampleThreshold вида ICC ретеста (источник берётся из расчёта). Значения по умолчанию
-    нет: порог CGI-S — эвристика, и выбор должен быть явным.
+    нет: выбор порога должен быть явным — ручной порог эвристический.
     other_reports — отчёты по другим самоотчётам (PHQ-8/9, WSAS): их направление за то же
     окно показывается как данные к объяснению «стороны измеряют разное».
     """
     if not isinstance(report, ClientReport):
         raise ValueError("Нужен ClientReport: клиентская сторона берётся из отчёта")
-    cgi, cgi_source = _cgi_threshold(cgi_threshold, cgi_threshold_source)
-    from_sample = isinstance(cgi_threshold, SampleThreshold)
+    cgi, cgi_source, cgi_raw = _cgi_threshold(cgi_threshold, cgi_threshold_source)
+    from_sample = cgi_raw is not None
     others = _others(report, other_reports)
     codes = tuple(o.measure.code for o in others)
     if ratings is None:
         return DiscrepancyBlock(report, BlockState.NOT_PROVIDED, (), len(report.history), (), (),
-                                (), 0, cgi, cgi_source, from_sample, (), (), codes)
+                                (), 0, cgi, cgi_source, from_sample, cgi_raw, (), (), codes)
 
     ratings = _ratings(tuple(ratings))
     client = {h.session: h for h in report.counted}
@@ -274,7 +277,7 @@ def build_discrepancies(report: ClientReport, ratings: Iterable[TherapistRating]
         ratings_not_counted=tuple(sorted(s for s, r in by_session.items() if not r.counted)),
         non_blind=sum(not p.rating.blind for p in pairs),
         cgi_threshold=cgi, cgi_threshold_source=cgi_source,
-        cgi_threshold_from_sample=from_sample, other_measures=codes,
+        cgi_threshold_from_sample=from_sample, cgi_threshold_raw=cgi_raw, other_measures=codes,
     )
     if len(pairs) < 2:
         return DiscrepancyBlock(state=BlockState.INSUFFICIENT, discrepancies=(), notes=(),
@@ -288,25 +291,29 @@ def build_discrepancies(report: ClientReport, ratings: Iterable[TherapistRating]
         found.append(_discrepancy(report, others, Window.BASE, pairs[0], pairs[-1], current,
                                   _persisted(base_cmp)))
     # окно 2 — только для ухудшения клиента: рецидив после ранних успехов от базы не виден.
-    # Пропускается, только если окно 1 уже вывело запись с ухудшением клиента; согласие в окне 1
-    # (терапевт тоже видит ухудшение от базы) не скрывает расхождение на последнем шаге
-    window1_shows_worse = current.kind is not None and current.client is Direction.WORSE
-    if len(pairs) >= 3 and not window1_shows_worse:
+    # Не выводится только как дубль окна 1 — та же клетка с теми же направлениями; другая клетка
+    # на последнем шаге (например, «противоположны» после «клиент хуже») выводится
+    if len(pairs) >= 3:
         adjacent = [_compare(report, a, b, cgi) for a, b in zip(pairs, pairs[1:])]
-        last = adjacent[-1]
+        last, (a, b) = adjacent[-1], pairs[-2:]
         if last.client is Direction.WORSE:
-            if last.kind is not None:
-                found.append(_discrepancy(report, others, Window.ADJACENT, pairs[-2], pairs[-1],
+            if last.kind is not None and last.signature != current.signature:
+                found.append(_discrepancy(report, others, Window.ADJACENT, a, b,
                                           last, _persisted(adjacent)))
             elif last.suppressed:
-                notes += (last.suppressed,)
+                # две строки: сторона клиента и, отдельно, почему нет расхождения у терапевта
+                notes += (f"{Window.ADJACENT.value} (сессии {a.session} → {b.session}): "
+                          f"самоотчёт {report.measure.code} {a.client.total} → {b.client.total}, "
+                          f"{last.client_change.value}",
+                          f"↳ {last.suppressed}")
     state = BlockState.FOUND if found else BlockState.NONE_FOUND
     return DiscrepancyBlock(state=state, discrepancies=tuple(found), notes=notes, **common)
 
 
 # --- подготовка входа --------------------------------------------------------------
 
-def _cgi_threshold(threshold: object, source: object) -> tuple[int, str]:
+def _cgi_threshold(threshold: object, source: object) -> tuple[int, str, float | None]:
+    """Порог в баллах, источник и рассчитанное значение (None — порог передан вручную)."""
     if isinstance(threshold, SampleThreshold):
         if source is not None:
             raise ValueError("У рассчитанного порога источник уже есть — "
@@ -321,18 +328,18 @@ def _cgi_threshold(threshold: object, source: object) -> tuple[int, str]:
                 or not math.isfinite(value) or value <= 0:
             raise ValueError(f"Порог CGI-S должен быть положительным конечным числом, "
                              f"получено {value!r}")
-        points, source = threshold.min_change_points, threshold.source
+        points, source, raw = threshold.min_change_points, threshold.source, float(value)
     else:
         if isinstance(threshold, bool) or not isinstance(threshold, int):
             raise ValueError(f"cgi_threshold — целое число баллов или SampleThreshold, "
                              f"получено {threshold!r}")
         if not isinstance(source, str) or not source.strip():
             raise ValueError("Порогу CGI-S нужен источник: укажите cgi_threshold_source")
-        points = threshold
+        points, raw = threshold, None
     span = CGIS.max_total - CGIS.min_total
     if not 1 <= points <= span:
         raise ValueError(f"Порог CGI-S — от 1 до {span} баллов, получено {points}")
-    return points, source
+    return points, source, raw
 
 
 def _others(report: ClientReport, other_reports: Iterable[ClientReport]) -> tuple[ClientReport, ...]:
@@ -374,9 +381,9 @@ def _ratings(ratings: tuple[object, ...]) -> tuple[TherapistRating, ...]:
             raise ValueError(f"Сессия {r.session}: отметки времени — datetime")
         try:
             r.blind
-        except TypeError as exc:
-            raise ValueError(f"Сессия {r.session}: отметки времени несравнимы — "
-                             f"одна с часовым поясом, другая без") from exc
+        except (TypeError, OverflowError) as exc:
+            raise ValueError(f"Сессия {r.session}: отметки времени несравнимы (одна с часовым "
+                             f"поясом, другая без) или вне диапазона дат") from exc
     sessions = [r.session for r in ratings]
     repeated = sorted({s for s in sessions if sessions.count(s) > 1})
     if repeated:
@@ -514,10 +521,11 @@ def _other_scale(other: ClientReport, start: int, end: int) -> OtherScale:
 def _alternatives(report: ClientReport, kind: Kind, client: Direction, therapist: Direction,
                   from_session: int) -> tuple[str, ...]:
     alts = [_literal(kind, client, therapist),
-            f"Возможно, дело в разных окнах: самоотчёт — за период, о котором спрашивает "
-            f"{report.measure.code}, оценка терапевта — состояние на сессии.",
-            f"Возможно, стороны измеряют разное: самоотчёт — {report.measure.name_ru}, "
-            f"CGI-S — общее клиническое впечатление о тяжести."]
+            f"Возможно, дело в разных окнах: самоотчёт заполняется по инструкции "
+            f"{report.measure.code} (период опроса у шкал разный), а оценка терапевта отражает "
+            f"состояние на сессии.",
+            f"Возможно, стороны измеряют разное: самоотчёт — шкала {report.measure.code}, "
+            f"оценка терапевта — общее клиническое впечатление о тяжести (CGI-S)."]
     if therapist is Direction.NONE:
         alts.append("Может быть, шаг однопунктовой оценки слишком крупный, чтобы отразить "
                     "такое изменение.")
@@ -564,12 +572,12 @@ def _approaching(p: PatternSummary) -> bool:
 
 def _exposure(p: PatternSummary) -> str:
     first, last = p.weeks[0], p.weeks[-1]
-    return (f"Если в недели {_week_span(first.week, last.week)} шла экспозиция, дистресс мог "
-            f"временно вырасти — сверить, попадают ли эти недели в окно сравнения: «{p.label}», "
-            f"избегание {first.avoidance_rate:.0%} → "
-            f"{last.avoidance_rate:.0%} (реакция отмечена в {p.reactions_marked[0]} и "
-            f"{p.reactions_marked[-1]} записях), интенсивность {first.mean_intensity:g} → "
-            f"{last.mean_intensity:g}.")
+    return (f"Если в недели паттерна «{p.label}» ({_week_span(first.week, last.week)}) шла "
+            f"экспозиция, дистресс мог временно вырасти: по карте триггеров избегание "
+            f"{first.avoidance_rate:.0%} → {last.avoidance_rate:.0%} (реакция отмечена в "
+            f"{p.reactions_marked[0]} и {p.reactions_marked[-1]} записях), интенсивность "
+            f"{first.mean_intensity:g} → {last.mean_intensity:g} — сверить, попадают ли эти "
+            f"недели в окно сравнения.")
 
 
 # --- текст -------------------------------------------------------------------------
@@ -630,10 +638,13 @@ def _comparison_context(block: DiscrepancyBlock) -> list[str]:
     lines.append(f"  порог по самоотчёту — как у статуса: {r.threshold:g} — {r.threshold_source}")
     if block.cgi_threshold_from_sample:
         label = ""
+        value = (f"{block.cgi_threshold} (расчёт {block.cgi_threshold_raw:.3g}; в баллах — "
+                 f"вверх до целого)")
     else:
+        value = str(block.cgi_threshold)
         label = "; эвристика для одного пункта" + (
             "; 1 балл — только анализ чувствительности" if block.cgi_threshold == 1 else "")
-    lines.append(f"  порог сдвига оценки терапевта (CGI-S): {block.cgi_threshold} — "
+    lines.append(f"  порог сдвига оценки терапевта (CGI-S): {value} — "
                  f"{block.cgi_threshold_source}{label}")
     lines += [f"  {note}" for note in block.notes]
     if not block.other_measures:

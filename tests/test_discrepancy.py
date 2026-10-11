@@ -274,8 +274,10 @@ def test_adjacent_unreachable_gives_reason():
     # от базы 16 → 10 — клиенту лучше (своё расхождение); 4 → 10 — хуже, но CGI-S на 6
     block = block_of({1: 16, 2: 8, 3: 4, 4: 10}, {1: 6, 2: 6, 3: 6, 4: 6})
     assert [d.window for d in block.discrepancies] == [Window.BASE]
-    assert ("ухудшение по оценке терапевта (CGI-S) не определяется: в сессии 3 — 6, "
-            "до границы шкалы меньше порога 2") in block.notes
+    i = block.notes.index("предыдущая пара → текущая (сессии 3 → 4): самоотчёт GAD7 4 → 10, "
+                          "надёжное ухудшение")
+    assert block.notes[i + 1] == ("↳ ухудшение по оценке терапевта (CGI-S) не определяется: "
+                                  "в сессии 3 — 6, до границы шкалы меньше порога 2")
 
 
 # --- устойчивость persisted -----------------------------------------------------------
@@ -681,8 +683,9 @@ def exposure_alts(entries, cell=(W, N)):
 
 def test_exposure_alternative_needs_supporting_trigger_data():
     (alt,) = exposure_alts(APPROACH)
-    assert alt.startswith("Если в недели 07.09–20.09.2026 шла экспозиция")
-    assert "сверить, попадают ли эти недели в окно сравнения" in alt
+    assert alt.startswith("Если в недели паттерна «за час до: звонок» (07.09–20.09.2026) шла "
+                          "экспозиция, дистресс мог временно вырасти: по карте триггеров")
+    assert alt.endswith("— сверить, попадают ли эти недели в окно сравнения.")
     assert "избегание 100% → 0% (реакция отмечена в 2 и 2 записях)" in alt
     assert "интенсивность 6 → 5.5" in alt
 
@@ -837,7 +840,9 @@ def test_sample_cgi_threshold_is_not_labelled_heuristic(ratings, points):
                                 cgi_threshold_source=None)
     assert block.cgi_threshold_from_sample
     line = next(line for line in block.lines() if "порог сдвига оценки терапевта" in line)
-    assert line == f"  порог сдвига оценки терапевта (CGI-S): {points} — {t.source}"
+    assert line == (f"  порог сдвига оценки терапевта (CGI-S): {points} (расчёт "
+                    f"{t.threshold:.3g}; в баллах — вверх до целого) — {t.source}")
+    assert block.cgi_threshold_raw == t.threshold
 
 
 def test_manual_cgi_threshold_line_has_source_and_heuristic_label():
@@ -926,9 +931,11 @@ def test_structural_alternatives_do_not_assume_gad7(measure, gad, threshold):
     block = build_discrepancies(rep, [rating(1, 4), rating(2, 4)], cgi_threshold=2,
                                 cgi_threshold_source=SOURCE)
     alts = block.discrepancies[0].alternatives
-    assert not any("две недели" in a or "симптомы" in a for a in alts)
-    assert any(f"самоотчёт — {measure.name_ru}" in a for a in alts)
-    assert any(f"о котором спрашивает {measure.code}" in a for a in alts)
+    assert not any("две недели" in a or "симптомы" in a or "о котором спрашивает" in a
+                   for a in alts)
+    assert any(f"самоотчёт — шкала {measure.code}, оценка терапевта — общее клиническое "
+               f"впечатление о тяжести (CGI-S)." in a for a in alts)
+    assert any(f"по инструкции {measure.code} (период опроса у шкал разный)" in a for a in alts)
 
 
 def test_plural_sessions_in_record_lines():
@@ -1058,4 +1065,51 @@ def extra_branch_blocks():
         block_of({1: 20, 2: 4, 3: 6, 4: 12}, {2: 2, 3: 6, 4: 4}),            # окно 2 при сдвиге
         block_of({1: 12, 2: 12, 3: 12, 4: 12}, {1: 4, 2: 6, 3: 5, 4: 6}),    # свёрнуто
         block_of({1: 12, 2: 16}, {1: 4, 3: 4}),                              # без пары
+        block_of({1: 12, 2: 12, 3: 16}, {1: 0, 2: 4, 3: 4}),                 # база: не засчитана
+        block_of({1: 12, 2: 8, 3: 4, 4: 10}, {1: 4, 2: 6, 3: 6, 4: 6}),      # окно 2: потолок
+        block_of({1: 12, 2: 16}, {1: 4, 2: 4}, others=[phq_partial]),        # нет замера в сессии
+        build_discrepancies(build_report(GAD7, [(1, score(GAD7, [2, 2, None, 2, 2, 1, 1],
+                                                          max_missing=1)), (2, full(16))]),
+                            [rating(1, 4), rating(2, 4)], cgi_threshold=2,
+                            cgi_threshold_source=SOURCE),                    # пересчёт базы
+        block_of({1: 10, 2: 12, 3: 16}, {1: 4, 2: 5, 3: 3}),                 # окно 2: противоположны
     ]
+
+
+# --- повторная проверка правок -------------------------------------------------------------
+
+def test_adjacent_window_shows_another_kind_after_client_worse_in_window_one():
+    # окно 1: самоотчёт +6, CGI-S −1 — «клиент хуже»; последний шаг: +4 при CGI-S −2 — противоположны
+    block = block_of({1: 10, 2: 12, 3: 16}, {1: 4, 2: 5, 3: 3})
+    assert [(d.kind, d.window) for d in block.discrepancies] == \
+        [(Kind.CLIENT_WORSE_UNSEEN, Window.BASE), (Kind.OPPOSITE, Window.ADJACENT)]
+
+
+def test_two_pairs_at_ceiling_give_one_note():
+    block = block_of({1: 12, 2: 16}, {1: 6, 2: 6})
+    assert block.notes == ("ухудшение по оценке терапевта (CGI-S) не определяется: в сессии 1 — 6, "
+                           "до границы шкалы меньше порога 2",)
+    assert len(block.lines()) == len(set(block.lines()))
+
+
+def test_window_two_note_names_the_client_change():
+    block = block_of({1: 12, 2: 8, 3: 13}, {1: 4, 2: 6, 3: 6})
+    assert ("предыдущая пара → текущая (сессии 2 → 3): самоотчёт GAD7 8 → 13, надёжное ухудшение"
+            in block.notes)
+    assert "  ↳ ухудшение по оценке терапевта (CGI-S) не определяется: в сессии 2 — 6, до " \
+           "границы шкалы меньше порога 2" in block.lines()
+
+
+def test_timestamps_out_of_range_rejected_with_value_error():
+    plus5 = timezone(timedelta(hours=5))
+    early = TherapistRating(1, cgis_score(4), datetime(1, 1, 1, 1, 0, tzinfo=plus5),
+                            datetime(1, 1, 1, 2, 0, tzinfo=plus5))
+    with pytest.raises(ValueError, match="вне диапазона"):
+        build_discrepancies(report_of({1: 12, 2: 16}), [early, rating(2, 4)], cgi_threshold=2,
+                            cgi_threshold_source=SOURCE)
+
+
+def test_manual_cgi_threshold_has_no_raw_value():
+    block = cell_block(W, N)
+    assert block.cgi_threshold_raw is None and not block.cgi_threshold_from_sample
+    assert not any("расчёт" in line for line in block.lines())

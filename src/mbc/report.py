@@ -364,7 +364,7 @@ def _render_flag(report: ClientReport) -> list[str]:
         prorated = [h.session for h in (base, latest) if h.prorated]
         if prorated:
             lines.append(f"  ! сигнал опирается на пересчитанный пропорционально балл: "
-                         f"сессия {', '.join(map(str, sorted(set(prorated))))}")
+                         f"{_sessions(sorted(set(prorated)))}")
         if flag.signal is Signal.GREEN:
             if m.caseness is not None and base.total < m.caseness:
                 lines.append(f"  жёлтый не применяется: на старте балл ниже порога «случая» "
@@ -389,7 +389,7 @@ def _render_status(report: ClientReport) -> list[str]:
         lines = ["СТАТУС: недостаточно данных — нужно минимум два засчитанных замера"]
     else:
         prorated = [h.session for h in (base, latest) if h.prorated]
-        mark = (f" (пересчитан пропорционально: сессия {', '.join(map(str, prorated))})"
+        mark = (f" (пересчитан пропорционально: {_sessions(prorated)})"
                 if prorated else "")
         lines = [f"СТАТУС: {_with_severity(base)} → {_with_severity(latest)}, "
                  f"сессии {base.session} → {latest.session}: {report.outcome.value}{mark}"]
@@ -492,6 +492,11 @@ def _not_counted(sessions: Sequence[int]) -> str:
     if len(sessions) == 1:
         return f"замер сессии {sessions[0]} не засчитан"
     return f"замеры сессий {', '.join(map(str, sessions))} не засчитаны"
+
+
+def _sessions(sessions: Sequence[int]) -> str:
+    """«сессия 1» или «сессии 1, 3»."""
+    return ("сессия " if len(sessions) == 1 else "сессии ") + ", ".join(map(str, sessions))
 
 
 def _records(n: int) -> str:
